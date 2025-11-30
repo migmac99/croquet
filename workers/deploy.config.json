@@ -1,0 +1,61 @@
+{
+  "$schema": "./deploy.config.schema.json",
+  "accountId": "ba23aa5a7d753a570c313fb7e157fbf4",
+
+  "synchronizer": {
+    "name": "synq",
+    "domain": "synq.alma.dev",
+    "r2": {
+      "bucketName": "synq-snapshots",
+      "createIfMissing": true
+    },
+    "vars": {
+      "CLUSTER_LABEL": "alma-prod",
+      "PROTOCOL_VERSION": "v1",
+      "MAX_CLIENTS_PER_SESSION": "100",
+      "SNAPSHOT_INTERVAL_MS": "60000",
+      "SESSION_TIMEOUT_MS": "300000"
+    }
+  },
+
+  "registry": {
+    "name": "synqreg",
+    "domain": "synqreg.alma.dev",
+    "kv": {
+      "sessions": {
+        "namespace": "synq-sessions",
+        "createIfMissing": true
+      },
+      "apikeys": {
+        "namespace": "synq-keys",
+        "createIfMissing": true
+      }
+    },
+    "vars": {
+      "SYNCHRONIZER_URL": "wss://synq.alma.dev",
+      "CLUSTER_LABEL": "alma-prod",
+      "SESSION_TTL_SECONDS": "3600",
+      "REQUIRE_API_KEY": "true"
+    }
+  },
+
+  "manager": {
+    "name": "synqmanager",
+    "domain": "synqmanager.alma.dev",
+    "kv": {
+      "sessions": {
+        "namespace": "synq-sessions"
+      },
+      "apikeys": {
+        "namespace": "synq-keys"
+      }
+    },
+    "vars": {
+      "SYNCHRONIZER_URL": "wss://synq.alma.dev",
+      "CLUSTER_LABEL": "alma-prod"
+    },
+    "access": {
+      "enabled": true
+    }
+  }
+}

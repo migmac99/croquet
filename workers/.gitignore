@@ -1,0 +1,14 @@
+# Generated files
+synchronizer/wrangler.toml
+registry/wrangler.toml
+manager/wrangler.toml
+
+# Dependencies
+node_modules/
+
+# Build artifacts
+dist/
+.wrangler/
+
+# Local dev
+.dev.vars
