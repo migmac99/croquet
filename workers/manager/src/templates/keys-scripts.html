@@ -11,6 +11,7 @@
         .map((d) => d.trim())
         .filter(Boolean),
       tier: form.tier.value,
+      version: parseInt(form.version.value, 10),
     }
 
     try {
@@ -34,6 +35,23 @@
 
   function copyKey() {
     navigator.clipboard.writeText(newKey)
+  }
+
+  async function rollKey(id) {
+    if (!confirm('Generate a new key? The old key will stop working immediately.')) return
+
+    try {
+      const res = await fetch('/keys/' + id + '/roll', { method: 'POST' })
+      if (!res.ok) throw new Error(await res.text())
+
+      const result = await res.json()
+      newKey = result.key
+      document.getElementById('newKeyDisplay').textContent = newKey
+      document.getElementById('keyCreatedDialog').querySelector('h3').textContent = 'New API Key Generated'
+      document.getElementById('keyCreatedDialog').showModal()
+    } catch (err) {
+      alert('Error: ' + err.message)
+    }
   }
 
   async function toggleKey(id, active) {

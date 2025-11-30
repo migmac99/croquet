@@ -8,6 +8,14 @@
     "dev:sync": "bun run prettier && ./deploy.sh dev:sync",
     "deploy": "bun run prettier && ./deploy.sh all",
     "deploy:staging": "bun run prettier && ./deploy.sh staging",
+    "deploy:synq": "./deploy.sh sync",
+    "deploy:reg": "./deploy.sh reg",
+    "deploy:mgr": "./deploy.sh mgr",
+    "tail": "./deploy.sh tail",
+    "tail:synq": "./deploy.sh tail:sync",
+    "tail:reg": "./deploy.sh tail:reg",
+    "tail:mgr": "./deploy.sh tail:mgr",
+    "tail:staging": "./deploy.sh staging:tail",
     "install": "cd manager && bun i && cd ../registry && bun i && cd ../synchronizer && bun i"
   },
   "devDependencies": {

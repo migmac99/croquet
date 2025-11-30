@@ -40,7 +40,8 @@ export interface ApiKeyRecord {
   /** Human-readable name */
   name: string
 
-  /** Allowed origin domains (glob patterns supported) */
+  /** Allowed origin domains (glob patterns supported)
+   *  Including "localhost" or "localhost:*" also allows file:// URLs */
   allowedDomains: string[]
 
   /** Optional: restrict to specific app IDs */

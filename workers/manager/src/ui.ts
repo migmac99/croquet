@@ -125,6 +125,7 @@ export function renderKeysPage(
         <span>${key.stats?.totalRequests || 0} requests</span>
       </div>
       <div class="flex gap-3 pt-4 border-t border-border">
+        <button onclick="rollKey('${key.id}')" class="btn btn-ghost btn-sm flex-1">Roll</button>
         <button onclick="toggleKey('${key.id}', ${!key.active})" class="btn btn-ghost btn-sm flex-1">${key.active ? 'Disable' : 'Enable'}</button>
         <button onclick="deleteKey('${key.id}')" class="btn btn-ghost btn-sm text-red-400 hover:text-red-300">Delete</button>
       </div>
@@ -168,6 +169,7 @@ export function renderKeysPage(
       </td>
       <td class="px-6 py-5">
         <div class="flex gap-3">
+          <button onclick="rollKey('${key.id}')" class="btn btn-ghost btn-sm">Roll</button>
           <button onclick="toggleKey('${key.id}', ${!key.active})" class="btn btn-ghost btn-sm">${key.active ? 'Disable' : 'Enable'}</button>
           <button onclick="deleteKey('${key.id}')" class="btn btn-ghost btn-sm text-red-400 hover:text-red-300">Delete</button>
         </div>

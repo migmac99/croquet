@@ -1,11 +1,57 @@
 import { DurableObject } from 'cloudflare:workers'
-import type { Env, ClientMeta, SessionState } from './types'
-import { CLOSE_REASONS } from './types'
+import type { Env, SessionState } from './types'
 import { SnapshotStorage } from './storage'
 
-const TICK_MS = 50 // 20 ticks per second
-const USERS_BROADCAST_INTERVAL_MS = 1000
+const DEFAULT_TICK_MS = 20 // 20 ticks per second (default)
 const SNAPSHOT_PRUNE_INTERVAL_MS = 300000 // 5 minutes
+const MAX_MESSAGES = 100000 // Max messages to retain since last snapshot (matches original)
+const REQU_SNAPSHOT = 60000 // Request snapshot if this many messages retained (matches original)
+const INITIAL_SEQ = 0xfffffff0 >>> 0 // 4294967280 - matches original reflector island.js
+
+/** Generate a random timeline identifier for seamless rejoin support */
+function generateTimeline(): string {
+  return Math.random().toString(36).substring(2) + Math.random().toString(36).substring(2)
+}
+
+/** Get current high-resolution time (equivalent to stabilizedPerformanceNow in reflector) */
+function now(): number {
+  return Date.now()
+}
+
+/** Get scaled time for session (advances at session's scale rate) */
+function getScaledTime(state: SessionState): number {
+  const sinceStart = now() - state.scaledStart
+  return sinceStart * state.scale
+}
+
+/** Advance and return current integer time for session */
+function advanceTime(state: SessionState): number {
+  const scaledTime = Math.floor(getScaledTime(state))
+  state.time = scaledTime
+  return state.time
+}
+
+/**
+ * Croquet Protocol Message Types (official format)
+ *
+ * Client -> Server:
+ *   { action: 'JOIN', args: { version, user, ... } }
+ *   { action: 'SEND', args: [...payload] }
+ *   { action: 'PING', args: timestamp }
+ *
+ * Server -> Client:
+ *   { id: sessionId, action: 'SYNC', args: { url, messages, time, seq, tove, reflector, timeline, flags } }
+ *   { id: sessionId, action: 'RECV', args: [...payload] }
+ *   { id: sessionId, action: 'TICK', args: timestamp }
+ *   { id: sessionId, action: 'PONG', args: [clientTimestamp, serverTimestamp] }
+ */
+
+interface IncomingMessage {
+  action: string
+  args: unknown
+  id?: string
+  tags?: string[]
+}
 
 /**
  * Attachment stored with each WebSocket (survives hibernation)
@@ -16,7 +62,7 @@ interface WSAttachment {
   userIp: string
   joinedAt: number
   lastSeen: number
-  joined: boolean // Has sent JOIN message
+  joined: boolean
 }
 
 /**
@@ -36,9 +82,9 @@ interface WSAttachment {
 export class Synchronizer extends DurableObject<Env> {
   private state: SessionState | null = null
   private storage: SnapshotStorage | null = null
-  private lastUsersBroadcast = 0
   private lastSnapshotPrune = 0
   private pendingSnapshot: { clientId: string; time: number } | null = null
+  private sessionName: string | null = null // Logical session name (from URL path)
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
@@ -51,12 +97,31 @@ export class Synchronizer extends DurableObject<Env> {
 
   /**
    * Hydrate state from storage (called on wake from hibernation)
+   * Handles migration of sessions created before new fields were added
    */
   private async hydrate(): Promise<void> {
-    const stored = await this.ctx.storage.get<SessionState>('state')
-    if (stored) {
-      this.state = stored
-      this.storage = new SnapshotStorage(this.env.SNAPSHOTS, this.sessionId)
+    try {
+      // Restore session name (logical name from URL, not DO internal ID)
+      this.sessionName = (await this.ctx.storage.get<string>('sessionName')) || null
+
+      const stored = await this.ctx.storage.get<SessionState>('state')
+      if (stored) {
+        this.state = stored
+
+        // Migrate sessions created before these fields were added
+        if (!this.state.messages) this.state.messages = []
+        if (!this.state.scale) this.state.scale = 1.0
+        if (!this.state.scaledStart) this.state.scaledStart = this.state.createdAt || now()
+        if (!this.state.rawStart) this.state.rawStart = this.state.createdAt || now()
+        if (this.state.lastTick === undefined) this.state.lastTick = 0
+        if (this.state.lastMsgTime === undefined) this.state.lastMsgTime = 0
+        if (!this.state.timeline) this.state.timeline = generateTimeline()
+        if (!this.state.flags || typeof this.state.flags !== 'object') this.state.flags = {}
+
+        if (this.env.SNAPSHOTS) this.storage = new SnapshotStorage(this.env.SNAPSHOTS, this.sessionId)
+      }
+    } catch (err) {
+      console.error(`[${this.sessionId}] Hydrate error:`, err)
     }
   }
 
@@ -79,6 +144,13 @@ export class Synchronizer extends DurableObject<Env> {
 
     // WebSocket upgrade
     if (request.headers.get('Upgrade') !== 'websocket') return new Response('Expected WebSocket', { status: 426 })
+
+    // Capture session name from header (passed by index.ts)
+    const headerSessionName = request.headers.get('X-Session-Name')
+    if (headerSessionName && !this.sessionName) {
+      this.sessionName = headerSessionName
+      await this.ctx.storage.put('sessionName', headerSessionName)
+    }
 
     // Check session capacity
     const maxClients = Number(this.env.MAX_CLIENTS_PER_SESSION) || 100
@@ -103,7 +175,6 @@ export class Synchronizer extends DurableObject<Env> {
     }
 
     // Accept WebSocket with hibernation support
-    // Tags allow us to find specific WebSockets later
     this.ctx.acceptWebSocket(server, [clientId])
 
     // Store attachment with WebSocket (serialized, survives hibernation)
@@ -121,7 +192,6 @@ export class Synchronizer extends DurableObject<Env> {
    * Handle WebSocket messages (called by runtime, wakes DO from hibernation)
    */
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    // Get attachment (rehydrated from serialized form)
     const attachment = ws.deserializeAttachment() as WSAttachment
     if (!attachment) {
       console.error('No attachment found for WebSocket')
@@ -133,7 +203,7 @@ export class Synchronizer extends DurableObject<Env> {
 
     try {
       const data = typeof message === 'string' ? message : new TextDecoder().decode(message)
-      const msg = JSON.parse(data)
+      const msg = JSON.parse(data) as IncomingMessage
       await this.handleMessage(ws, attachment, msg)
     } catch (err) {
       console.error(`[${this.sessionId}] Message parse error:`, err)
@@ -146,16 +216,19 @@ export class Synchronizer extends DurableObject<Env> {
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
     const attachment = ws.deserializeAttachment() as WSAttachment | null
     const clientId = attachment?.clientId || 'unknown'
+    const userId = attachment?.userId
 
     console.log(`[${this.sessionId}] Client disconnected: ${clientId} (${code}: ${reason})`)
 
-    // Broadcast updated users
-    this.broadcastUsers()
+    // Send users left event if client had joined
+    if (attachment?.joined && userId) {
+      // Use setTimeout to let the socket be removed from the list first
+      setTimeout(() => this.sendUsersEvent([], [userId]), 0)
+    }
 
     // Check if session is now empty
     const remaining = this.ctx.getWebSockets().length
     if (remaining === 0) {
-      // Schedule cleanup via alarm
       const timeoutMs = Number(this.env.SESSION_TIMEOUT_MS) || 300000
       await this.ctx.storage.setAlarm(Date.now() + timeoutMs)
     }
@@ -170,54 +243,79 @@ export class Synchronizer extends DurableObject<Env> {
   }
 
   /**
-   * Process a message from a client
+   * Process a message from a client (official Croquet protocol)
    */
-  private async handleMessage(ws: WebSocket, attachment: WSAttachment, msg: unknown[]): Promise<void> {
-    const type = msg[0] as string
+  private async handleMessage(ws: WebSocket, attachment: WSAttachment, msg: IncomingMessage): Promise<void> {
+    const { action, args } = msg
 
-    switch (type) {
+    switch (action) {
       case 'JOIN':
-        await this.handleJoin(ws, attachment, msg)
+        await this.handleJoin(ws, attachment, args as Record<string, unknown>)
         break
       case 'SEND':
-        this.handleSend(attachment, msg)
+        this.handleSend(attachment, args as unknown[], msg.tags)
         break
       case 'PING':
-        this.handlePing(ws, msg)
+        this.handlePing(ws, args as number)
         break
       case 'SNAP':
-        await this.handleSnap(ws, attachment, msg)
+        await this.handleSnap(ws, attachment, args as Record<string, unknown>)
         break
-      case 'REQU':
-        this.handleRequ(ws, msg)
+      case 'TICKS':
+        this.handleTicks(args as { tick?: number; delay?: number })
+        break
+      case 'PULSE':
+        // Heartbeat - lastSeen already updated above
         break
       default:
-        console.warn(`[${this.sessionId}] Unknown message type: ${type}`)
+        console.warn(`[${this.sessionId}] Unknown action: ${action}`)
     }
   }
 
   /**
    * Handle JOIN - client joining the session
    */
-  private async handleJoin(ws: WebSocket, attachment: WSAttachment, msg: unknown[]): Promise<void> {
-    const [, args] = msg as [string, { version?: string; user?: string; details?: Record<string, unknown> }]
-
+  private async handleJoin(ws: WebSocket, attachment: WSAttachment, args: Record<string, unknown>): Promise<void> {
     // Update attachment
-    attachment.userId = args.user
+    attachment.userId = args.user as string | undefined
     attachment.joined = true
     ws.serializeAttachment(attachment)
 
+    // Extract protocol fields from JOIN args
+    const tove = args.tove as string | undefined
+    const flags = args.flags as Record<string, unknown> | undefined
+    const ticks = args.ticks as { tick?: number; delay?: number } | undefined
+
+    // Track if this is the first client (before state initialization)
+    const isFirstClient = !this.state
+
     // Initialize session state if first client
     if (!this.state) {
+      const startTime = now()
       this.state = {
         id: this.sessionId,
-        time: Date.now(),
+        time: 0,
         seq: 0,
-        createdAt: Date.now(),
-        lastActivity: Date.now(),
+        createdAt: startTime,
+        lastActivity: startTime,
+        timeline: generateTimeline(),
+        tove, // Store tove from first client
+        flags: flags || {}, // Store flags from first client (default to empty object)
+        tick: ticks?.tick || DEFAULT_TICK_MS,
+        delay: ticks?.delay || 0,
+        scale: 1.0,
+        scaledStart: startTime,
+        rawStart: startTime,
+        lastTick: 0,
+        lastMsgTime: 0,
+        messages: [], // Buffered messages for late-joiner catchup
       }
       await this.ctx.storage.put('state', this.state)
-      this.storage = new SnapshotStorage(this.env.SNAPSHOTS, this.sessionId)
+      if (this.env.SNAPSHOTS) this.storage = new SnapshotStorage(this.env.SNAPSHOTS, this.sessionId)
+    } else {
+      // Update tove/flags from joining client if not set (migration for old sessions)
+      if (!this.state.tove && tove) this.state.tove = tove
+      if (!this.state.flags && flags) this.state.flags = flags
     }
 
     // Try to load latest snapshot
@@ -238,28 +336,72 @@ export class Synchronizer extends DurableObject<Env> {
       }
     }
 
-    // Build users list from all connected WebSockets
-    const users = this.buildUsersList()
+    // Build snapshot URL if we have one (empty string if none, matching reflector behavior)
+    const snapshotUrl = snapshot ? `data:application/octet-stream;base64,${this.arrayBufferToBase64(snapshot)}` : ''
 
-    // Send SYNC response
-    const syncMsg: unknown[] = [
-      'SYNC',
-      {
-        time: this.state.time,
-        seq: this.state.seq,
-        users,
-        ...(snapshot && {
-          snapshot: this.arrayBufferToBase64(snapshot),
-          snapshotTime,
-          snapshotSeq,
-        }),
-      },
-    ]
+    // Without a snapshot, client must initialize fresh
+    // With a snapshot, client loads snapshot and replays messages
+    const clientMustInitFresh = !snapshotUrl
 
-    ws.send(JSON.stringify(syncMsg))
+    if (clientMustInitFresh) {
+      // No snapshot - client will init fresh
+      // For late joiners: keep messages if they start at the right seq for catchup
+      // For first client: start with empty messages
+      if (isFirstClient) {
+        this.state.messages = []
+        this.state.seq = INITIAL_SEQ
+      } else {
+        // Late joiner without snapshot - check if messages can be replayed
+        // Messages should start at INITIAL_SEQ+1 for valid catchup
+        const firstMsgSeq = (this.state.messages[0] as number[] | undefined)?.[1]
+        if (firstMsgSeq !== (INITIAL_SEQ + 1) >>> 0) {
+          // Messages can't be used for catchup - reset
+          console.log(`[${this.sessionId}] Resetting session - messages start at ${firstMsgSeq}, expected ${(INITIAL_SEQ + 1) >>> 0}`)
+          this.state.messages = []
+          this.state.seq = INITIAL_SEQ
+          // Generate new timeline to force all clients to reconnect fresh
+          this.state.timeline = generateTimeline()
+        }
+      }
+    }
 
-    // Broadcast user joined to others
-    this.broadcastUsers()
+    // syncSeq tells client where messages start from
+    // For fresh init: INITIAL_SEQ (so first msg is INITIAL_SEQ+1)
+    // For snapshot: the snapshot's seq
+    const syncSeq = clientMustInitFresh ? INITIAL_SEQ : snapshotSeq
+    const syncTime = clientMustInitFresh ? 0 : snapshotTime
+
+    // Send SYNC response (official Croquet protocol format)
+    // Must include: url, messages, time, seq, tove, reflector, timeline, flags
+    const syncArgs: Record<string, unknown> = {
+      url: snapshotUrl,
+      messages: this.state.messages, // Buffered messages since snapshot (for catchup)
+      time: syncTime,
+      seq: syncSeq,
+      tove: this.state.tove,
+      reflector: this.env.CLUSTER_LABEL || 'synq',
+      timeline: this.state.timeline,
+      flags: this.state.flags || {}, // Always include flags (even if empty)
+    }
+
+    // Add snapshot metadata if we have a snapshot
+    if (snapshotUrl) {
+      syncArgs.snapshotTime = snapshotTime
+      syncArgs.snapshotSeq = snapshotSeq
+    }
+
+    const syncResponse = {
+      id: this.sessionId,
+      action: 'SYNC',
+      args: syncArgs,
+    }
+
+    ws.send(JSON.stringify(syncResponse))
+
+    // Schedule users event (matches original reflector behavior)
+    // The users event is broadcast to ALL clients and buffered for late-joiners
+    // Use setTimeout to ensure joining client has processed SYNC first
+    setTimeout(() => this.sendUsersEvent([attachment.userId], []), 0)
 
     // Ensure ticking
     this.scheduleTick()
@@ -268,19 +410,129 @@ export class Synchronizer extends DurableObject<Env> {
   }
 
   /**
-   * Handle SEND - broadcast event to all clients
+   * Send users event to all clients (matches original reflector USERS function)
+   * This is broadcast to ALL clients and buffered for late-joiners
    */
-  private handleSend(attachment: WSAttachment, msg: unknown[]): void {
+  private sendUsersEvent(joined: (string | undefined)[], left: (string | undefined)[]): void {
+    if (!this.state) return
+    if (joined.length === 0 && left.length === 0) return
+
+    const sockets = this.ctx.getWebSockets()
+    const activeClients = sockets.filter((s) => {
+      const att = s.deserializeAttachment() as WSAttachment
+      return att?.joined
+    })
+    const active = activeClients.length
+    const total = sockets.length
+
+    if (active === 0) return // No-one to receive the message
+
+    // Advance time
+    const time = advanceTime(this.state)
+
+    // For fresh session, seq starts at INITIAL_SEQ (set in handleJoin)
+    // First message will be at INITIAL_SEQ+1 = 4294967281
+    // For sessions with messages, continue from current seq
+    this.state.seq = (this.state.seq + 1) >>> 0
+
+    // Build users payload
+    const payload: Record<string, unknown> = { what: 'users', active, total }
+    if (joined.length > 0) payload.joined = joined.filter(Boolean)
+    if (left.length > 0) payload.left = left.filter(Boolean)
+
+    // Build message in raw format: [time, seq, payload]
+    const message = [time, this.state.seq, payload]
+
+    // Broadcast RECV to all active clients
+    const recvMsg = {
+      id: this.sessionId,
+      action: 'RECV',
+      args: message,
+    }
+    const msgStr = JSON.stringify(recvMsg)
+    activeClients.forEach((ws) => ws.send(msgStr))
+
+    // Buffer message for late-joiner catchup
+    this.state.messages.push(message)
+    this.state.lastMsgTime = time
+
+    // Persist state
+    this.ctx.storage.put('state', this.state)
+  }
+
+  /**
+   * Send REQU to all clients to request a snapshot (matches original reflector)
+   */
+  private sendREQU(): void {
+    const msg = JSON.stringify({ id: this.sessionId, action: 'REQU' })
+    this.broadcast(msg)
+  }
+
+  /**
+   * Send INFO to all clients (matches original reflector)
+   */
+  private sendINFO(args: { code: string; msg: string; options?: Record<string, unknown> }): void {
+    const msg = JSON.stringify({ id: this.sessionId, action: 'INFO', args })
+    this.broadcast(msg)
+  }
+
+  /**
+   * Handle SEND - broadcast event to all clients
+   * Matches original reflector: advanceTime, timestamp message, buffer for SYNC catchup
+   */
+  private handleSend(_attachment: WSAttachment, args: unknown[], _tags?: string[]): void {
     if (!this.state) return
 
-    const [, ...payload] = msg
-    this.state.seq++
-    this.state.time = Date.now()
-    this.state.lastActivity = Date.now()
+    // Check if message buffer is full (matches original reflector)
+    if (this.state.messages.length >= MAX_MESSAGES) {
+      this.sendREQU()
+      this.sendINFO({
+        code: 'SNAPSHOT_NEEDED',
+        msg: 'Cannot buffer more messages. Need snapshot.',
+        options: { level: 'warning' },
+      })
+      return // Drop message - buffer full
+    }
 
-    // Broadcast RECV to all clients
-    const recvMsg = JSON.stringify(['RECV', this.state.seq, this.state.time, ...payload])
-    this.broadcast(recvMsg)
+    // Request snapshot with increasing frequency as buffer fills (matches original)
+    if (this.state.messages.length >= REQU_SNAPSHOT) {
+      const headroom = MAX_MESSAGES - this.state.messages.length
+      const every = Math.max(1, ((headroom / 100) | 0) * 10)
+      if (this.state.messages.length % every === 0) {
+        console.log(`[${this.sessionId}] Reached ${this.state.messages.length} messages, sending REQU`)
+        this.sendREQU()
+        // Send warning if safety buffer is less than 25%
+        if (headroom < (MAX_MESSAGES - REQU_SNAPSHOT) / 4) {
+          this.sendINFO({
+            code: 'SNAPSHOT_NEEDED',
+            msg: 'Synchronizer message buffer almost full. Need snapshot ASAP.',
+            options: { level: 'warning' },
+          })
+        }
+      }
+    }
+
+    // Advance time (matches original reflector)
+    const time = advanceTime(this.state)
+
+    // Increment seq (uint32 wrap)
+    this.state.seq = (this.state.seq + 1) >>> 0
+    this.state.lastActivity = now()
+
+    // Build message in raw format: [time, seq, ...payload]
+    const message = [time, this.state.seq, ...args]
+
+    // Broadcast RECV to all clients (official format)
+    const recvMsg = {
+      id: this.sessionId,
+      action: 'RECV',
+      args: message,
+    }
+    this.broadcast(JSON.stringify(recvMsg))
+
+    // Buffer message for late-joiner catchup (matches original: island.messages.push(message))
+    this.state.messages.push(message)
+    this.state.lastMsgTime = time
 
     // Persist state (debounced via write coalescing)
     this.ctx.storage.put('state', this.state)
@@ -288,40 +540,102 @@ export class Synchronizer extends DurableObject<Env> {
 
   /**
    * Handle PING - latency measurement
+   * Note: PONG does NOT include session id (matches original reflector)
    */
-  private handlePing(ws: WebSocket, msg: unknown[]): void {
-    const [, pingId] = msg
-    ws.send(JSON.stringify(['PONG', pingId, Date.now()]))
+  private handlePing(ws: WebSocket, timestamp: number): void {
+    const pongMsg = {
+      action: 'PONG',
+      args: [timestamp, Date.now()],
+    }
+    ws.send(JSON.stringify(pongMsg))
+  }
+
+  /**
+   * Handle TICKS - client requesting tick rate/scale change
+   * Matches original reflector TICKS behavior
+   */
+  private handleTicks(args: { tick?: number; delay?: number; scale?: number }): void {
+    if (!this.state) return
+
+    const { tick, delay, scale } = args
+
+    // Handle delay change
+    if (delay !== undefined && delay > 0) this.state.delay = delay
+
+    // Handle scale change (matches original reflector)
+    if (scale !== undefined && scale > 0) {
+      const MIN_SCALE = 0.001
+      const MAX_SCALE = 1000
+      const currentScaledTime = getScaledTime(this.state)
+      const scaleToApply = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale))
+      this.state.scale = scaleToApply
+      // Maintain scaledStart at full precision so time doesn't slip
+      this.state.scaledStart = now() - currentScaledTime / scaleToApply
+    }
+
+    // Handle tick rate change
+    if (tick && tick > 0) {
+      this.state.tick = tick
+      this.scheduleTick()
+    }
+
+    // Persist updated config
+    this.ctx.storage.put('state', this.state)
   }
 
   /**
    * Handle SNAP - snapshot operations
+   * Matches original reflector SNAP behavior including message buffer management
    */
-  private async handleSnap(ws: WebSocket, attachment: WSAttachment, msg: unknown[]): Promise<void> {
-    const [, action, ...args] = msg
+  private async handleSnap(ws: WebSocket, attachment: WSAttachment, args: Record<string, unknown>): Promise<void> {
+    const action = args.action as string
 
     if (action === 'request') {
-      // Request a snapshot from this client
       if (this.pendingSnapshot) return
 
       this.pendingSnapshot = { clientId: attachment.clientId, time: this.state?.time || 0 }
-      ws.send(JSON.stringify(['SNAP', 'request', this.state?.time, this.state?.seq]))
+      const snapRequest = {
+        id: this.sessionId,
+        action: 'SNAP',
+        args: { action: 'request', time: this.state?.time, seq: this.state?.seq },
+      }
+      ws.send(JSON.stringify(snapRequest))
     } else if (action === 'response') {
-      // Receive snapshot data from client
-      const [snapshotData, time, seq] = args
-      if (!this.storage || !snapshotData) return
+      const { data: snapshotData, time, seq } = args
+      if (!this.storage || !snapshotData || !this.state) return
+
+      const snapshotTime = time as number
+      const snapshotSeq = seq as number
 
       try {
         const data = this.base64ToArrayBuffer(snapshotData as string)
-        await this.storage.save(data, time as number, seq as number)
+        await this.storage.save(data, snapshotTime, snapshotSeq)
 
-        if (this.state) {
-          this.state.snapshotTime = time as number
-          this.state.snapshotSeq = seq as number
-          await this.ctx.storage.put('state', this.state)
+        // Purge messages up to snapshot seq (matches original reflector behavior)
+        // Keep messages with seq > snapshotSeq for late-joiner catchup
+        const msgs = this.state.messages
+        if (msgs.length > 0) {
+          // Find first message to keep (seq after snapshot)
+          const firstToKeep = msgs.findIndex((msg) => (msg[1] as number) > snapshotSeq)
+          if (firstToKeep > 0) {
+            // Splice out messages before snapshot
+            msgs.splice(0, firstToKeep)
+            console.log(`[${this.sessionId}] Purged ${firstToKeep} messages, keeping ${msgs.length}`)
+          } else if (firstToKeep === -1) {
+            // All messages are before or at snapshot, clear all
+            msgs.length = 0
+            console.log(`[${this.sessionId}] Purged all messages`)
+          }
         }
 
-        console.log(`[${this.sessionId}] Snapshot saved: time=${time}, seq=${seq}, size=${data.byteLength}`)
+        // Update snapshot metadata
+        this.state.snapshotTime = snapshotTime
+        this.state.snapshotSeq = snapshotSeq
+        this.state.snapshotUrl = `snapshot:${snapshotSeq}` // Reference for latest
+
+        await this.ctx.storage.put('state', this.state)
+
+        console.log(`[${this.sessionId}] Snapshot saved: time=${snapshotTime}, seq=${snapshotSeq}, size=${data.byteLength}`)
       } catch (err) {
         console.error(`[${this.sessionId}] Failed to save snapshot:`, err)
       }
@@ -331,90 +645,46 @@ export class Synchronizer extends DurableObject<Env> {
   }
 
   /**
-   * Handle REQU - special requests
-   */
-  private handleRequ(ws: WebSocket, msg: unknown[]): void {
-    const [, reqType] = msg
-    if (reqType === 'snapshot' && this.state) ws.send(JSON.stringify(['SNAP', 'request', this.state.time, this.state.seq]))
-  }
-
-  /**
    * Schedule the next tick via alarm
    */
   private scheduleTick(): void {
-    // Only schedule if we have clients
     if (this.ctx.getWebSockets().length === 0) return
-
-    // Schedule next tick
-    this.ctx.storage.setAlarm(Date.now() + TICK_MS)
+    const tickMs = this.state?.tick || DEFAULT_TICK_MS
+    this.ctx.storage.setAlarm(Date.now() + tickMs)
   }
 
   /**
    * Handle alarm - used for ticking and cleanup
+   * Matches original reflector TICK behavior
    */
   async alarm(): Promise<void> {
     const sockets = this.ctx.getWebSockets()
+    if (sockets.length === 0) return
 
-    // If no clients, this might be cleanup time
-    if (sockets.length === 0) {
-      console.log(`[${this.sessionId}] Session idle, ready for hibernation`)
-      // Don't delete state - allow rejoin with same state
-      // Could optionally prune old snapshots here
-      return
-    }
-
-    // Tick: advance time and broadcast
+    // Tick: advance time and broadcast (official format)
     if (this.state) {
-      this.state.time = Date.now()
-      this.broadcast(JSON.stringify(['TICK', this.state.time]))
+      const time = advanceTime(this.state)
+      this.state.lastTick = time
 
-      // Persist state periodically (not every tick)
+      const tickMsg = {
+        id: this.sessionId,
+        action: 'TICK',
+        args: time,
+      }
+      this.broadcast(JSON.stringify(tickMsg))
+
+      // Persist state periodically
       if (this.state.seq % 100 === 0) await this.ctx.storage.put('state', this.state)
     }
 
-    // Broadcast users periodically
-    const now = Date.now()
-    if (now - this.lastUsersBroadcast > USERS_BROADCAST_INTERVAL_MS) {
-      this.broadcastUsers()
-      this.lastUsersBroadcast = now
-    }
-
     // Prune old snapshots periodically
-    if (this.storage && now - this.lastSnapshotPrune > SNAPSHOT_PRUNE_INTERVAL_MS) {
+    const currentTime = now()
+    if (this.storage && currentTime - this.lastSnapshotPrune > SNAPSHOT_PRUNE_INTERVAL_MS) {
       this.storage.prune(5).catch((err) => console.error('Snapshot prune failed:', err))
-      this.lastSnapshotPrune = now
+      this.lastSnapshotPrune = currentTime
     }
 
-    // Schedule next tick
     this.scheduleTick()
-  }
-
-  /**
-   * Build users list from connected WebSockets
-   */
-  private buildUsersList(): Record<string, { visibleId?: string; active?: boolean }> {
-    const users: Record<string, { visibleId?: string; active?: boolean }> = {}
-    const now = Date.now()
-
-    for (const ws of this.ctx.getWebSockets()) {
-      const attachment = ws.deserializeAttachment() as WSAttachment | null
-      if (attachment?.joined) {
-        users[attachment.clientId] = {
-          visibleId: attachment.userId,
-          active: now - attachment.lastSeen < 5000,
-        }
-      }
-    }
-
-    return users
-  }
-
-  /**
-   * Broadcast USERS message to all clients
-   */
-  private broadcastUsers(): void {
-    const users = this.buildUsersList()
-    this.broadcast(JSON.stringify(['USERS', users]))
   }
 
   /**
@@ -429,17 +699,17 @@ export class Synchronizer extends DurableObject<Env> {
         }
         ws.send(message)
       } catch (err) {
-        // WebSocket may have closed, will be cleaned up
         console.error('Broadcast send error:', err)
       }
     }
   }
 
   /**
-   * Get session ID from DO id
+   * Get session ID - uses logical session name from URL (not DO internal ID)
+   * Falls back to DO ID for legacy sessions or debugging
    */
   private get sessionId(): string {
-    return this.ctx.id.toString()
+    return this.sessionName || this.ctx.id.toString()
   }
 
   // Utility: ArrayBuffer to Base64

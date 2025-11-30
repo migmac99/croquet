@@ -7,6 +7,7 @@
  *
  * Endpoints:
  *   GET  /dispatch?session={id}&app={appId}  → Returns synchronizer URL (requires API key)
+ *   GET  /clients/join?meta=login            → API key verification (Multisynq/DePIN)
  *   POST /register                           → Synchronizer registers session
  *   POST /unregister                         → Synchronizer unregisters session
  *   GET  /sessions                           → List active sessions
@@ -16,6 +17,7 @@
  */
 
 import type { Env, SessionRecord, DispatchResponse, ApiKeyRecord, ApiKeyValidation } from './types'
+import { corsHeaders, handleCors, jsonResponse, errorResponse, isOriginAllowed, getOrigin } from '@croquet/worker-shared'
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -26,6 +28,9 @@ export default {
 
     try {
       const path = url.pathname
+
+      // Handle WebSocket connections - proxy to synchronizer
+      if (path === '/clients/connect' && request.headers.get('Upgrade')?.toLowerCase() === 'websocket') return handleClientsConnect(request, env, url)
 
       switch (path) {
         case '/dispatch':
@@ -39,6 +44,9 @@ export default {
 
         case '/sessions':
           return handleListSessions(request, env)
+
+        case '/clients/join':
+          return handleClientsJoin(request, env)
 
         case '/health':
         case '/healthz':
@@ -75,18 +83,8 @@ async function validateApiKey(request: Request, env: Env): Promise<ApiKeyValidat
   if (!record.active) return { valid: false, error: 'API key is deactivated' }
 
   // Check domain whitelist
-  const origin = request.headers.get('Origin') || request.headers.get('Referer')
-  if (origin && record.allowedDomains.length > 0) {
-    const originHost = extractHost(origin)
-    const allowed = record.allowedDomains.some((pattern) => matchDomain(originHost, pattern))
-
-    if (!allowed) {
-      return {
-        valid: false,
-        error: `Domain '${originHost}' not allowed for this API key`,
-      }
-    }
-  }
+  const originCheck = isOriginAllowed(getOrigin(request), record.allowedDomains)
+  if (!originCheck.allowed) return { valid: false, error: originCheck.error }
 
   // Update last used (fire and forget)
   const updated: ApiKeyRecord = {
@@ -104,45 +102,6 @@ async function validateApiKey(request: Request, env: Env): Promise<ApiKeyValidat
     keyId: record.id,
     tier: record.tier,
   }
-}
-
-/**
- * Extract hostname from URL
- */
-function extractHost(url: string): string {
-  try {
-    return new URL(url).hostname
-  } catch {
-    return url
-  }
-}
-
-/**
- * Match domain against pattern (supports wildcards)
- * Examples:
- *   - "example.com" matches "example.com"
- *   - "*.example.com" matches "sub.example.com", "a.b.example.com"
- *   - "*" matches everything
- *   - "localhost" matches "localhost"
- *   - "localhost:*" matches "localhost:3000", "localhost:8080"
- */
-function matchDomain(domain: string, pattern: string): boolean {
-  if (pattern === domain) return true // Exact match
-  if (pattern === '*') return true // Wildcard all
-
-  // Port wildcard (localhost:*)
-  if (pattern.endsWith(':*')) {
-    const base = pattern.slice(0, -2)
-    return domain === base || domain.startsWith(base + ':')
-  }
-
-  // Subdomain wildcard (*.example.com)
-  if (pattern.startsWith('*.')) {
-    const baseDomain = pattern.slice(2)
-    return domain === baseDomain || domain.endsWith('.' + baseDomain)
-  }
-
-  return false
 }
 
 // ============================================================================
@@ -244,10 +203,7 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
   }
 
   const ttl = Number(env.SESSION_TTL_SECONDS) || 3600
-  await env.SESSIONS.put(body.sessionId, JSON.stringify(record), {
-    expirationTtl: ttl,
-  })
-
+  await env.SESSIONS.put(body.sessionId, JSON.stringify(record), { expirationTtl: ttl })
   return Response.json({ success: true, record }, { headers: corsHeaders() })
 }
 
@@ -297,18 +253,67 @@ async function handleHealth(env: Env): Promise<Response> {
   )
 }
 
-// ============================================================================
-// Utilities
-// ============================================================================
+/**
+ * Handle /clients/connect - Proxy WebSocket connections to synchronizer
+ * The Multisynq SDK uses the registry URL for both API verification and WebSocket connections
+ */
+async function handleClientsConnect(request: Request, env: Env, url: URL): Promise<Response> {
+  const sessionId = url.searchParams.get('session')
+  if (!sessionId) return new Response('Missing session parameter', { status: 400 })
 
-function corsHeaders(): Record<string, string> {
-  return {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Key',
-  }
+  // Build synchronizer URL with session ID in path
+  // Convert ws:// to http:// and wss:// to https:// for fetch()
+  // fetch() handles WebSocket upgrade via headers, not protocol
+  const syncUrl = new URL(env.SYNCHRONIZER_URL)
+  if (syncUrl.protocol === 'ws:') syncUrl.protocol = 'http:'
+  else if (syncUrl.protocol === 'wss:') syncUrl.protocol = 'https:'
+  syncUrl.pathname = `/${sessionId}`
+
+  // Forward all query params except 'session' (already in path)
+  url.searchParams.forEach((value, key) => {
+    if (key !== 'session') syncUrl.searchParams.set(key, value)
+  })
+
+  console.log(`[registry] Proxying WebSocket to: ${syncUrl.toString()}`)
+
+  // Forward the WebSocket request to synchronizer
+  const syncRequest = new Request(syncUrl.toString(), {
+    method: request.method,
+    headers: request.headers,
+  })
+
+  return fetch(syncRequest)
 }
 
-function handleCors(): Response {
-  return new Response(null, { status: 204, headers: corsHeaders() })
+/**
+ * Handle /clients/join - API key verification for Multisynq/DePIN clients
+ * Returns { developerId } on success, { error } on failure
+ */
+async function handleClientsJoin(request: Request, env: Env): Promise<Response> {
+  // Get API key from X-Croquet-Auth header
+  const apiKey = request.headers.get('X-Croquet-Auth')
+  if (!apiKey) return errorResponse('Missing API key', 401)
+
+  // Look up API key
+  const record = await env.APIKEYS.get<ApiKeyRecord>(`key:${apiKey}`, 'json')
+  if (!record) return errorResponse('Invalid API key', 403)
+  if (!record.active) return errorResponse('API key is deactivated', 403)
+
+  // Check domain whitelist
+  const originCheck = isOriginAllowed(getOrigin(request), record.allowedDomains)
+  if (!originCheck.allowed) return errorResponse(originCheck.error!, 403)
+
+  // Update usage stats (fire and forget)
+  const updated: ApiKeyRecord = {
+    ...record,
+    lastUsed: Date.now(),
+    stats: {
+      totalRequests: (record.stats?.totalRequests || 0) + 1,
+      totalSessions: record.stats?.totalSessions || 0,
+    },
+  }
+  env.APIKEYS.put(`key:${apiKey}`, JSON.stringify(updated))
+
+  // Return developerId (use the key owner's ID or a generated one)
+  return jsonResponse({ developerId: record.metadata?.createdBy || record.id })
 }

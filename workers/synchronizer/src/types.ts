@@ -3,12 +3,21 @@ export interface Env {
   SYNCHRONIZER: DurableObjectNamespace
   SNAPSHOTS: R2Bucket
 
+  // Optional: KV for standalone mode (local dev)
+  APIKEYS?: KVNamespace
+
+  // Optional: Registry service binding (production)
+  REGISTRY?: Fetcher
+
   // Config vars
   CLUSTER_LABEL: string
   PROTOCOL_VERSION: string
   MAX_CLIENTS_PER_SESSION: string
   SNAPSHOT_INTERVAL_MS: string
   SESSION_TIMEOUT_MS: string
+
+  // Fallback: Registry URL for HTTP calls (when service binding not available)
+  REGISTRY_URL?: string
 
   // Secrets
   JWT_SECRET?: string
@@ -32,6 +41,18 @@ export interface SessionState {
   lastActivity: number
   snapshotTime?: number
   snapshotSeq?: number
+  snapshotUrl?: string // URL of latest snapshot
+  timeline: string // Random string for seamless rejoin
+  tove?: string // Encrypted session token echoed from first client's JOIN
+  flags?: Record<string, unknown> // Feature flags
+  tick: number // Tick interval in ms (default 50)
+  delay: number // Message delay in ms (default 0)
+  scale: number // Time scale factor (default 1.0)
+  scaledStart: number // Synthetic start time for scaled time calculation
+  rawStart: number // Raw start time (performance.now equivalent)
+  lastTick: number // Time of last tick
+  lastMsgTime: number // Time of last message
+  messages: unknown[][] // Buffered messages since last snapshot for late-joiner catchup
 }
 
 // Snapshot metadata

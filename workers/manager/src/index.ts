@@ -70,12 +70,22 @@ function getCookie(request: Request, name: string): string | null {
 }
 
 /**
- * Generate a secure API key
+ * Generate a secure API key (the part used for authentication)
+ * Format: version digit + 48 hex chars
+ * - v1: "1xxx" (deprecated Croquet.io - requires reflector URL embedded)
+ * - v2: "2xxx" (WebRTC/DePIN mode)
+ * - v3: "3xxx" (Cloudflare Workers WebSocket mode)
+ *
+ * Note: Only v1 keys have reflector URL embedded ("reflectorUrl:1xxx") for
+ * legacy client compatibility. v2/v3 keys are just "2xxx" or "3xxx".
  */
-function generateApiKey(): string {
+function generateApiKey(version: 1 | 2 | 3): string {
   const bytes = new Uint8Array(24)
   crypto.getRandomValues(bytes)
-  return 'synq_' + Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+  const randomPart = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+
+  // All versions use same format: version digit + random hex
+  return `${version}${randomPart}`
 }
 
 /**
@@ -147,10 +157,9 @@ export default {
     const isLocalhost = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
     let user: AuthenticatedUser | null = null
 
-    if (isLocalhost) {
-      // Dev mode - use mock user
-      user = { email: 'dev@localhost', sub: 'dev' }
-    } else {
+    if (isLocalhost)
+      user = { email: 'dev@localhost', sub: 'dev' } // Dev mode - use mock user
+    else {
       // Production - verify Cloudflare Access JWT
       user = await verifyAccessJWT(request, env)
       if (!user) return error('Unauthorized - Cloudflare Access authentication required', 401)
@@ -184,6 +193,10 @@ export default {
         if (request.method === 'DELETE') return await deleteApiKey(keyId, env, user)
         if (request.method === 'PATCH') return await updateApiKey(keyId, request, env, user)
       }
+
+      // Roll (regenerate) API key
+      const rollMatch = path.match(/^\/keys\/([a-f0-9]+)\/roll$/)
+      if (rollMatch && request.method === 'POST') return await rollApiKey(rollMatch[1], env, user)
 
       // Sessions management
       if (path === '/sessions' || path === '/sessions/') {
@@ -239,25 +252,40 @@ async function createApiKey(request: Request, env: Env, user: AuthenticatedUser)
   const body = await request.json<CreateApiKeyRequest>()
   if (!body.name || !body.allowedDomains?.length) return error('name and allowedDomains are required')
 
+  // Default to v3 (Cloudflare Workers WebSocket)
+  const version = body.version || 3
+
+  // Only v1 (legacy) keys require a reflector URL embedded in the key
+  // v2 (DePIN) and v3 (Cloudflare Workers) are configured separately
+  const needsReflector = version === 1
+  const reflectorUrl = needsReflector ? body.reflectorUrl || env.SYNCHRONIZER_URL : undefined
+  if (needsReflector && !reflectorUrl) return error('reflectorUrl is required for v1 keys (or set SYNCHRONIZER_URL)')
+
   const id = generateKeyId()
-  const key = generateApiKey()
+  const key = generateApiKey(version) // e.g., "1abc123", "2abc123", or "3abc123"
+
+  // For v1 keys: embed reflector URL for legacy client compatibility
+  // Format: "ws://example.com:1abc123" - client uses lastIndexOf(':') to parse
+  const formattedKey = needsReflector ? `${reflectorUrl}:${key}` : key
 
   const record: ApiKeyRecord = {
     id,
-    key,
+    key, // Store the auth key (without URL prefix)
     name: body.name,
     allowedDomains: body.allowedDomains,
     allowedApps: body.allowedApps,
     tier: body.tier || 'free',
     active: true,
     createdAt: Date.now(),
+    version,
+    reflectorUrl,
     metadata: {
       ...body.metadata,
       createdBy: user.email,
     },
   }
 
-  // Store by key (for validation lookups)
+  // Store by key (for validation lookups) - uses the auth key without URL prefix
   await env.APIKEYS.put(`key:${key}`, JSON.stringify(record))
 
   // Store by ID (for admin lookups) - with key redacted
@@ -266,14 +294,16 @@ async function createApiKey(request: Request, env: Env, user: AuthenticatedUser)
 
   const response: CreateApiKeyResponse = {
     id,
-    key, // Only returned on creation!
+    key: formattedKey, // Return formatted key for app config (with URL prefix for v1)
     name: body.name,
     allowedDomains: body.allowedDomains,
     tier: record.tier,
     createdAt: record.createdAt,
+    version,
+    reflectorUrl,
   }
 
-  console.log(`API key created: ${id} by ${user.email}`)
+  console.log(`API key created: ${id} (v${version}) by ${user.email}`)
   return json(response, 201)
 }
 
@@ -365,6 +395,57 @@ async function deleteApiKey(keyId: string, env: Env, user: AuthenticatedUser): P
 
   console.log(`API key deleted: ${keyId} by ${user.email}`)
   return json({ deleted: true, id: keyId })
+}
+
+async function rollApiKey(keyId: string, env: Env, user: AuthenticatedUser): Promise<Response> {
+  // Find the full record to get the actual key
+  let fullRecord: ApiKeyRecord | null = null
+  let cursor: string | undefined
+
+  do {
+    const result = await env.APIKEYS.list({ prefix: 'key:', cursor })
+    for (const k of result.keys) {
+      const record = await env.APIKEYS.get<ApiKeyRecord>(k.name, 'json')
+      if (record && record.id === keyId) {
+        fullRecord = record
+        break
+      }
+    }
+    if (fullRecord) break
+    cursor = result.list_complete ? undefined : result.cursor
+  } while (cursor)
+
+  if (!fullRecord) return error('API key not found', 404)
+
+  // Generate new key with same version/reflector as original
+  const version = fullRecord.version || 2 // Default to v2 for legacy keys
+  const newKey = generateApiKey(version)
+
+  // Format the key for user's app config (only v1 legacy keys need reflector URL prefix)
+  const needsReflector = version === 1 && fullRecord.reflectorUrl
+  const formattedKey = needsReflector ? `${fullRecord.reflectorUrl}:${newKey}` : newKey
+
+  // Update record with new key
+  const updated: ApiKeyRecord = {
+    ...fullRecord,
+    key: newKey,
+    metadata: {
+      ...fullRecord.metadata,
+      rolledBy: user.email,
+      rolledAt: new Date().toISOString(),
+    },
+  }
+
+  // Delete old key record, create new one
+  await env.APIKEYS.delete(`key:${fullRecord.key}`)
+  await env.APIKEYS.put(`key:${newKey}`, JSON.stringify(updated))
+
+  // Update ID record (key stays redacted)
+  const { key: _, ...safeUpdated } = updated
+  await env.APIKEYS.put(`id:${keyId}`, JSON.stringify({ ...safeUpdated, key: '[REDACTED]' }))
+
+  console.log(`API key rolled: ${keyId} by ${user.email}`)
+  return json({ id: keyId, key: formattedKey })
 }
 
 // ============================================================================

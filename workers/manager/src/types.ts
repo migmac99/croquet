@@ -66,6 +66,12 @@ export interface ApiKeyRecord {
 
   /** Optional metadata */
   metadata?: Record<string, string>
+
+  /** API key version: 1 = deprecated Croquet.io, 2 = WebRTC/DePIN, 3 = Cloudflare Workers (WebSocket) */
+  version?: 1 | 2 | 3
+
+  /** Reflector URL (only for v1 legacy keys) */
+  reflectorUrl?: string
 }
 
 /**
@@ -90,6 +96,10 @@ export interface CreateApiKeyRequest {
   allowedApps?: string[]
   tier?: ApiKeyRecord['tier']
   metadata?: Record<string, string>
+  /** API key version: 1 = deprecated, 2 = WebRTC/DePIN, 3 = Cloudflare Workers (WebSocket). Defaults to 3 */
+  version?: 1 | 2 | 3
+  /** Reflector URL for v1 legacy keys only (embedded in key for old client compatibility) */
+  reflectorUrl?: string
 }
 
 /**
@@ -114,6 +124,8 @@ export interface CreateApiKeyResponse {
   allowedDomains: string[]
   tier: string
   createdAt: number
+  version: 1 | 2 | 3
+  reflectorUrl?: string
 }
 
 /**

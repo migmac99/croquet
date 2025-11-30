@@ -21,3 +21,5 @@ _site
 vendor
 Gemfile.lock
 # new additions
+
+workers/wrangler_shared/

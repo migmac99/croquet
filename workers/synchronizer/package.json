@@ -9,6 +9,9 @@
     "types": "wrangler types",
     "test": "vitest"
   },
+  "dependencies": {
+    "@croquet/worker-shared": "file:../shared"
+  },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20241106.0",
     "typescript": "^5.6.3",

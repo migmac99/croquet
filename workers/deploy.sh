@@ -130,14 +130,18 @@ setup_registry_kv() {
 
 # Generate synchronizer wrangler.toml from config
 generate_sync_config() {
+    local apikeys_kv_id="$1"
     local account_id=$(config '.accountId')
     local name=$(config '.synchronizer.name')
     local domain=$(config '.synchronizer.domain')
     local bucket=$(config '.synchronizer.r2.bucketName')
+    local reg_name=$(config '.registry.name')
 
     # Get vars as JSON and convert to TOML
     local vars=$(config '.synchronizer.vars')
     local vars_toml=$(echo "$vars" | jq -r 'to_entries | .[] | "\(.key) = \"\(.value)\""')
+    # Local dev vars - override CLUSTER_LABEL, add REGISTRY_URL
+    local local_vars_toml=$(echo "$vars" | jq -r '.CLUSTER_LABEL = "local-dev" | to_entries | .[] | "\(.key) = \"\(.value)\""')
 
     cat > "$SYNC_DIR/wrangler.toml" << EOF
 # Auto-generated from deploy.config.json - do not edit manually
@@ -150,6 +154,27 @@ account_id = "$account_id"
 [[migrations]]
 tag = "v1"
 new_classes = ["Synchronizer"]
+
+# ============================================================================
+# Default/Local development configuration
+# ============================================================================
+[durable_objects]
+bindings = [
+  { name = "SYNCHRONIZER", class_name = "Synchronizer" }
+]
+
+[[r2_buckets]]
+binding = "SNAPSHOTS"
+bucket_name = "${bucket}-dev"
+
+# KV for API key validation (shared with registry in local dev)
+[[kv_namespaces]]
+binding = "APIKEYS"
+id = "$apikeys_kv_id"
+
+[vars]
+$local_vars_toml
+REGISTRY_URL = "http://localhost:8788"
 
 # ============================================================================
 # Production environment
@@ -171,6 +196,11 @@ bindings = [
 [[env.production.r2_buckets]]
 binding = "SNAPSHOTS"
 bucket_name = "$bucket"
+
+# Service binding to registry for API key validation
+[[env.production.services]]
+binding = "REGISTRY"
+service = "$reg_name"
 
 [env.production.vars]
 $vars_toml
@@ -195,6 +225,11 @@ bindings = [
 [[env.staging.r2_buckets]]
 binding = "SNAPSHOTS"
 bucket_name = "${bucket}-staging"
+
+# Service binding to registry for API key validation
+[[env.staging.services]]
+binding = "REGISTRY"
+service = "${reg_name}-staging"
 
 [env.staging.vars]
 $vars_toml
@@ -292,7 +327,8 @@ EOF
 deploy_sync() {
     header "Deploying Synchronizer"
 
-    generate_sync_config
+    setup_registry_kv  # Get APIKEYS_KV_ID for service binding config
+    generate_sync_config "$APIKEYS_KV_ID"
     setup_r2
 
     cd "$SYNC_DIR"
@@ -450,7 +486,8 @@ deploy_mgr() {
 # Run single worker locally
 run_dev_sync() {
     header "Starting Synchronizer (dev)"
-    generate_sync_config
+    setup_registry_kv  # Get APIKEYS_KV_ID
+    generate_sync_config "$APIKEYS_KV_ID"
     cd "$SYNC_DIR"
     install_deps "$SYNC_DIR"
     CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID" bunx wrangler dev --port 8787 2>&1 | sed -l 's/\[wrangler:info\] //g; s/\[wrangler:err\] //g; s/\[wrangler:warn\] //g'
@@ -462,7 +499,7 @@ run_dev_all() {
 
     # Generate configs
     setup_registry_kv
-    generate_sync_config
+    generate_sync_config "$APIKEYS_KV_ID"
     generate_reg_config "$SESSIONS_KV_ID" "$APIKEYS_KV_ID"
     generate_mgr_config "$SESSIONS_KV_ID" "$APIKEYS_KV_ID"
 
@@ -473,7 +510,7 @@ run_dev_all() {
 
     echo ""
     echo -e "${CYAN}Starting workers on:${NC}"
-    echo "  Synchronizer: http://localhost:8787"
+    echo "  Synchronizer: http://localhost:8787 (ws://localhost:8787)"
     echo "  Registry:     http://localhost:8788"
     echo "  Manager:      http://localhost:8789"
     echo ""
@@ -483,12 +520,16 @@ run_dev_all() {
     # Trap to kill all background processes on exit
     trap 'kill $(jobs -p) 2>/dev/null; exit' INT TERM
 
+    # Shared local state directory for KV namespaces (so registry and manager share API keys)
+    local PERSIST_DIR="$SCRIPT_DIR/wrangler_shared"
+
     # Start all workers in background with colored prefixes
     # FORCE_COLOR=1 makes wrangler output colors even when piped
+    # --persist-to ensures registry and manager share the same KV data locally
     # Strip [wrangler:*] prefix and add our own colored prefixes
-    (cd "$SYNC_DIR" && FORCE_COLOR=1 CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID" bunx wrangler dev --port 8787 --inspector-port 9229 2>&1 | sed -l 's/\[wrangler:info\] //g; s/\[wrangler:err\] //g; s/\[wrangler:warn\] //g' | sed -l $'s/^/\033[0;36m[syq] \033[0m /') &
-    (cd "$REG_DIR" && FORCE_COLOR=1 CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID" bunx wrangler dev --port 8788 --inspector-port 9230 2>&1 | sed -l 's/\[wrangler:info\] //g; s/\[wrangler:err\] //g; s/\[wrangler:warn\] //g' | sed -l $'s/^/\033[0;32m[reg] \033[0m /') &
-    (cd "$MGR_DIR" && FORCE_COLOR=1 CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID" bunx wrangler dev --port 8789 --inspector-port 9231 2>&1 | sed -l 's/\[wrangler:info\] //g; s/\[wrangler:err\] //g; s/\[wrangler:warn\] //g' | sed -l $'s/^/\033[1;33m[mgr] \033[0m /') &
+    (cd "$SYNC_DIR" && FORCE_COLOR=1 CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID" bunx wrangler dev --port 8787 --inspector-port 9229 --persist-to "$PERSIST_DIR" 2>&1 | sed -l 's/\[wrangler:info\] //g; s/\[wrangler:err\] //g; s/\[wrangler:warn\] //g' | sed -l $'s/^/\033[0;36m[syq] \033[0m /') &
+    (cd "$REG_DIR" && FORCE_COLOR=1 CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID" bunx wrangler dev --port 8788 --inspector-port 9230 --persist-to "$PERSIST_DIR" 2>&1 | sed -l 's/\[wrangler:info\] //g; s/\[wrangler:err\] //g; s/\[wrangler:warn\] //g' | sed -l $'s/^/\033[0;32m[reg] \033[0m /') &
+    (cd "$MGR_DIR" && FORCE_COLOR=1 CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID" bunx wrangler dev --port 8789 --inspector-port 9231 --persist-to "$PERSIST_DIR" 2>&1 | sed -l 's/\[wrangler:info\] //g; s/\[wrangler:err\] //g; s/\[wrangler:warn\] //g' | sed -l $'s/^/\033[1;33m[mgr] \033[0m /') &
 
     # Wait for all background jobs
     wait
@@ -522,6 +563,55 @@ print_info() {
     echo ""
 }
 
+# Tail logs from deployed workers
+# Filter out noisy Alarm logs
+TAIL_FILTER='grep -v -i "alarm"'
+
+tail_sync() {
+    local env_flag=""
+    [ "$ENV" = "staging" ] && env_flag="--env staging"
+    header "Tailing Synchronizer logs ($ENV)"
+    cd "$SYNC_DIR"
+    CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID" bunx wrangler tail $env_flag --format pretty 2>&1 | eval "$TAIL_FILTER"
+}
+
+tail_reg() {
+    local env_flag=""
+    [ "$ENV" = "staging" ] && env_flag="--env staging"
+    header "Tailing Registry logs ($ENV)"
+    cd "$REG_DIR"
+    CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID" bunx wrangler tail $env_flag --format pretty 2>&1 | eval "$TAIL_FILTER"
+}
+
+tail_mgr() {
+    local env_flag=""
+    [ "$ENV" = "staging" ] && env_flag="--env staging"
+    header "Tailing Manager logs ($ENV)"
+    cd "$MGR_DIR"
+    CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID" bunx wrangler tail $env_flag --format pretty 2>&1 | eval "$TAIL_FILTER"
+}
+
+tail_all() {
+    header "Tailing all workers ($ENV)"
+    local env_flag=""
+    [ "$ENV" = "staging" ] && env_flag="--env staging"
+
+    echo ""
+    echo -e "${CYAN}Tailing logs from:${NC}"
+    echo "  Synchronizer, Registry, Manager"
+    echo ""
+    echo -e "${YELLOW}Press Ctrl+C to stop${NC}"
+    echo ""
+
+    trap 'kill $(jobs -p) 2>/dev/null; exit' INT TERM
+
+    (cd "$SYNC_DIR" && CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID" bunx wrangler tail $env_flag --format pretty 2>&1 | grep --line-buffered -v -i "alarm" | sed -l $'s/^/\033[0;36m[syq] \033[0m /') &
+    (cd "$REG_DIR" && CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID" bunx wrangler tail $env_flag --format pretty 2>&1 | grep --line-buffered -v -i "alarm" | sed -l $'s/^/\033[0;32m[reg] \033[0m /') &
+    (cd "$MGR_DIR" && CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID" bunx wrangler tail $env_flag --format pretty 2>&1 | grep --line-buffered -v -i "alarm" | sed -l $'s/^/\033[1;33m[mgr] \033[0m /') &
+
+    wait
+}
+
 # Main
 main() {
     local cmd="${1:-all}"
@@ -534,6 +624,12 @@ main() {
             ENV="staging"
             cmd="all"
             ;;
+        staging:tail|tail:staging)
+            ENV="staging"
+            check_deps
+            tail_all
+            exit 0
+            ;;
         dev)
             check_deps
             run_dev_all
@@ -542,6 +638,26 @@ main() {
         dev:sync)
             check_deps
             run_dev_sync
+            exit 0
+            ;;
+        tail|tail:all)
+            check_deps
+            tail_all
+            exit 0
+            ;;
+        tail:sync)
+            check_deps
+            tail_sync
+            exit 0
+            ;;
+        tail:reg)
+            check_deps
+            tail_reg
+            exit 0
+            ;;
+        tail:mgr)
+            check_deps
+            tail_mgr
             exit 0
             ;;
         sync|synchronizer)
@@ -557,7 +673,25 @@ main() {
             cmd="all"
             ;;
         *)
-            echo "Usage: $0 [all|staging|dev|sync|reg|mgr]"
+            echo "Usage: $0 [command]"
+            echo ""
+            echo "Deploy commands:"
+            echo "  all, production  Deploy all workers to production"
+            echo "  staging          Deploy all workers to staging"
+            echo "  sync             Deploy synchronizer only"
+            echo "  reg              Deploy registry only"
+            echo "  mgr              Deploy manager only"
+            echo ""
+            echo "Dev commands:"
+            echo "  dev              Run all workers locally"
+            echo "  dev:sync         Run synchronizer locally"
+            echo ""
+            echo "Tail commands:"
+            echo "  tail, tail:all   Tail logs from all production workers"
+            echo "  tail:sync        Tail synchronizer logs"
+            echo "  tail:reg         Tail registry logs"
+            echo "  tail:mgr         Tail manager logs"
+            echo "  staging:tail     Tail logs from all staging workers"
             exit 1
             ;;
     esac
