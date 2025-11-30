@@ -7,5 +7,8 @@
     "eslint": "^8.57.1",
     "eslint-config-airbnb-base": "^15.0.0",
     "eslint-plugin-import": "^2.31.0"
+  },
+  "dependencies": {
+    "wrangler": "4.51.0"
   }
 }

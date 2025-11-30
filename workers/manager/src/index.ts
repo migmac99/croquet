@@ -15,6 +15,7 @@ import type {
   CreateApiKeyResponse,
   AuthenticatedUser,
 } from './types';
+import { renderDashboard, renderKeysPage, renderSessionsPage } from './ui';
 
 // Cloudflare Access public keys endpoint
 const CERTS_URL = 'https://YOUR_TEAM_DOMAIN.cloudflareaccess.com/cdn-cgi/access/certs';
@@ -116,6 +117,18 @@ function json(data: unknown, status = 200, headers: Record<string, string> = {})
  */
 function error(message: string, status = 400): Response {
   return json({ error: message }, status);
+}
+
+/**
+ * HTML response helper
+ */
+function html(content: string, status = 200): Response {
+  return new Response(content, {
+    status,
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+    },
+  });
 }
 
 /**

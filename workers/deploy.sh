@@ -29,11 +29,11 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-log() { echo -e "${BLUE}[deploy]${NC} $1"; }
-success() { echo -e "${GREEN}✓${NC} $1"; }
-warn() { echo -e "${YELLOW}⚠${NC} $1"; }
-error() { echo -e "${RED}✗${NC} $1"; exit 1; }
-header() { echo -e "\n${CYAN}━━━ $1 ━━━${NC}\n"; }
+log() { echo -e "${BLUE}[deploy]${NC} $1" >&2; }
+success() { echo -e "${GREEN}✓${NC} $1" >&2; }
+warn() { echo -e "${YELLOW}⚠${NC} $1" >&2; }
+error() { echo -e "${RED}✗${NC} $1" >&2; exit 1; }
+header() { echo -e "\n${CYAN}━━━ $1 ━━━${NC}\n" >&2; }
 
 # Check dependencies
 check_deps() {
@@ -136,6 +136,7 @@ generate_sync_config() {
 
     # Get vars as JSON and convert to TOML
     local vars=$(config '.synchronizer.vars')
+    local vars_toml=$(echo "$vars" | jq -r 'to_entries | .[] | "\(.key) = \"\(.value)\""')
 
     cat > "$SYNC_DIR/wrangler.toml" << EOF
 # Auto-generated from deploy.config.json - do not edit manually
@@ -145,41 +146,56 @@ compatibility_date = "2024-11-01"
 compatibility_flags = ["nodejs_compat"]
 account_id = "$account_id"
 
-[observability]
-enabled = true
-
-[durable_objects]
-bindings = [
-  { name = "SYNCHRONIZER", class_name = "Synchronizer" }
-]
-
-[[r2_buckets]]
-binding = "SNAPSHOTS"
-bucket_name = "$bucket"
-
 [[migrations]]
 tag = "v1"
 new_classes = ["Synchronizer"]
 
-[vars]
-EOF
-
-    # Add vars from config
-    echo "$vars" | jq -r 'to_entries | .[] | "\(.key) = \"\(.value)\""' >> "$SYNC_DIR/wrangler.toml"
-
-    # Add environment configs
-    cat >> "$SYNC_DIR/wrangler.toml" << EOF
-
+# ============================================================================
+# Production environment
+# ============================================================================
 [env.production]
 routes = [
   { pattern = "$domain", custom_domain = true }
 ]
 
+[env.production.observability]
+enabled = true
+
+[env.production.durable_objects]
+bindings = [
+  { name = "SYNCHRONIZER", class_name = "Synchronizer" }
+]
+
+[[env.production.r2_buckets]]
+binding = "SNAPSHOTS"
+bucket_name = "$bucket"
+
+[env.production.vars]
+$vars_toml
+
+# ============================================================================
+# Staging environment
+# ============================================================================
 [env.staging]
 name = "${name}-staging"
 routes = [
   { pattern = "${domain/synq/synq-staging}", custom_domain = true }
 ]
+
+[env.staging.observability]
+enabled = true
+
+[env.staging.durable_objects]
+bindings = [
+  { name = "SYNCHRONIZER", class_name = "Synchronizer" }
+]
+
+[[env.staging.r2_buckets]]
+binding = "SNAPSHOTS"
+bucket_name = "${bucket}-staging"
+
+[env.staging.vars]
+$vars_toml
 EOF
 
     success "Generated synchronizer wrangler.toml"
@@ -195,6 +211,7 @@ generate_reg_config() {
 
     # Get vars as JSON
     local vars=$(config '.registry.vars')
+    local vars_toml=$(echo "$vars" | jq -r 'to_entries | .[] | "\(.key) = \"\(.value)\""')
 
     cat > "$REG_DIR/wrangler.toml" << EOF
 # Auto-generated from deploy.config.json - do not edit manually
@@ -204,36 +221,50 @@ compatibility_date = "2024-11-01"
 compatibility_flags = ["nodejs_compat"]
 account_id = "$account_id"
 
-[observability]
-enabled = true
-
-[[kv_namespaces]]
-binding = "SESSIONS"
-id = "$sessions_kv_id"
-
-[[kv_namespaces]]
-binding = "APIKEYS"
-id = "$apikeys_kv_id"
-
-[vars]
-EOF
-
-    # Add vars from config
-    echo "$vars" | jq -r 'to_entries | .[] | "\(.key) = \"\(.value)\""' >> "$REG_DIR/wrangler.toml"
-
-    # Add environment configs
-    cat >> "$REG_DIR/wrangler.toml" << EOF
-
+# ============================================================================
+# Production environment
+# ============================================================================
 [env.production]
 routes = [
   { pattern = "$domain", custom_domain = true }
 ]
 
+[env.production.observability]
+enabled = true
+
+[[env.production.kv_namespaces]]
+binding = "SESSIONS"
+id = "$sessions_kv_id"
+
+[[env.production.kv_namespaces]]
+binding = "APIKEYS"
+id = "$apikeys_kv_id"
+
+[env.production.vars]
+$vars_toml
+
+# ============================================================================
+# Staging environment
+# ============================================================================
 [env.staging]
 name = "${name}-staging"
 routes = [
   { pattern = "${domain/synqreg/synqreg-staging}", custom_domain = true }
 ]
+
+[env.staging.observability]
+enabled = true
+
+[[env.staging.kv_namespaces]]
+binding = "SESSIONS"
+id = "$sessions_kv_id"
+
+[[env.staging.kv_namespaces]]
+binding = "APIKEYS"
+id = "$apikeys_kv_id"
+
+[env.staging.vars]
+$vars_toml
 EOF
 
     success "Generated registry wrangler.toml"
@@ -291,6 +322,7 @@ generate_mgr_config() {
 
     # Get vars as JSON
     local vars=$(config '.manager.vars')
+    local vars_toml=$(echo "$vars" | jq -r 'to_entries | .[] | "\(.key) = \"\(.value)\""')
 
     cat > "$MGR_DIR/wrangler.toml" << EOF
 # Auto-generated from deploy.config.json - do not edit manually
@@ -300,39 +332,52 @@ compatibility_date = "2024-11-01"
 compatibility_flags = ["nodejs_compat"]
 account_id = "$account_id"
 
-[observability]
-enabled = true
-
-[[kv_namespaces]]
-binding = "SESSIONS"
-id = "$sessions_kv_id"
-
-[[kv_namespaces]]
-binding = "APIKEYS"
-id = "$apikeys_kv_id"
-
-[vars]
-EOF
-
-    # Add vars from config
-    echo "$vars" | jq -r 'to_entries | .[] | "\(.key) = \"\(.value)\""' >> "$MGR_DIR/wrangler.toml"
-
-    # Add ACCESS_AUD placeholder (user must set after Access app creation)
-    echo 'ACCESS_AUD = ""' >> "$MGR_DIR/wrangler.toml"
-
-    # Add environment configs
-    cat >> "$MGR_DIR/wrangler.toml" << EOF
-
+# ============================================================================
+# Production environment
+# ============================================================================
 [env.production]
 routes = [
   { pattern = "$domain", custom_domain = true }
 ]
 
+[env.production.observability]
+enabled = true
+
+[[env.production.kv_namespaces]]
+binding = "SESSIONS"
+id = "$sessions_kv_id"
+
+[[env.production.kv_namespaces]]
+binding = "APIKEYS"
+id = "$apikeys_kv_id"
+
+[env.production.vars]
+$vars_toml
+ACCESS_AUD = ""
+
+# ============================================================================
+# Staging environment
+# ============================================================================
 [env.staging]
 name = "${name}-staging"
 routes = [
   { pattern = "${domain/synqmanager/synqmanager-staging}", custom_domain = true }
 ]
+
+[env.staging.observability]
+enabled = true
+
+[[env.staging.kv_namespaces]]
+binding = "SESSIONS"
+id = "$sessions_kv_id"
+
+[[env.staging.kv_namespaces]]
+binding = "APIKEYS"
+id = "$apikeys_kv_id"
+
+[env.staging.vars]
+$vars_toml
+ACCESS_AUD = ""
 EOF
 
     success "Generated manager wrangler.toml"
