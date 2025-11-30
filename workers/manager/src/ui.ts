@@ -5,13 +5,13 @@
  */
 
 export function renderDashboard(data: {
-  user: string;
-  cluster: string;
-  synchronizer: string;
+  user: string
+  cluster: string
+  synchronizer: string
   stats: {
-    apiKeys: { total: number; active: number };
-    sessions: { total: number; totalClients: number };
-  };
+    apiKeys: { total: number; active: number }
+    sessions: { total: number; totalClients: number }
+  }
 }): string {
   return `<!DOCTYPE html>
 <html lang="en" class="dark">
@@ -192,20 +192,26 @@ export function renderDashboard(data: {
     </main>
   </div>
 </body>
-</html>`;
+</html>`
 }
 
-export function renderKeysPage(keys: Array<{
-  id: string;
-  name: string;
-  allowedDomains: string[];
-  tier: string;
-  active: boolean;
-  createdAt: number;
-  lastUsed?: number;
-  stats?: { totalRequests: number; totalSessions: number };
-}>, user: string, cluster: string): string {
-  const keyRows = keys.map(key => `
+export function renderKeysPage(
+  keys: Array<{
+    id: string
+    name: string
+    allowedDomains: string[]
+    tier: string
+    active: boolean
+    createdAt: number
+    lastUsed?: number
+    stats?: { totalRequests: number; totalSessions: number }
+  }>,
+  user: string,
+  cluster: string
+): string {
+  const keyRows = keys
+    .map(
+      (key) => `
     <tr class="border-b border-border hover:bg-secondary/30 transition-colors">
       <td class="p-4">
         <div class="font-medium">${key.name}</div>
@@ -213,7 +219,10 @@ export function renderKeysPage(keys: Array<{
       </td>
       <td class="p-4">
         <div class="flex flex-wrap gap-1">
-          ${key.allowedDomains.slice(0, 3).map(d => `<span class="badge">${d}</span>`).join('')}
+          ${key.allowedDomains
+            .slice(0, 3)
+            .map((d) => `<span class="badge">${d}</span>`)
+            .join('')}
           ${key.allowedDomains.length > 3 ? `<span class="badge">+${key.allowedDomains.length - 3}</span>` : ''}
         </div>
       </td>
@@ -237,7 +246,9 @@ export function renderKeysPage(keys: Array<{
         </div>
       </td>
     </tr>
-  `).join('');
+  `
+    )
+    .join('')
 
   return `<!DOCTYPE html>
 <html lang="en" class="dark">
@@ -488,19 +499,25 @@ export function renderKeysPage(keys: Array<{
     }
   </script>
 </body>
-</html>`;
+</html>`
 }
 
-export function renderSessionsPage(sessions: Array<{
-  sessionId: string;
-  synchronizerUrl: string;
-  createdAt: number;
-  lastSeen: number;
-  clientCount: number;
-  appId?: string;
-  apiKeyId?: string;
-}>, user: string, cluster: string): string {
-  const sessionRows = sessions.map(s => `
+export function renderSessionsPage(
+  sessions: Array<{
+    sessionId: string
+    synchronizerUrl: string
+    createdAt: number
+    lastSeen: number
+    clientCount: number
+    appId?: string
+    apiKeyId?: string
+  }>,
+  user: string,
+  cluster: string
+): string {
+  const sessionRows = sessions
+    .map(
+      (s) => `
     <tr class="border-b border-border hover:bg-secondary/30 transition-colors">
       <td class="p-4">
         <div class="font-mono text-sm truncate max-w-xs" title="${s.sessionId}">${s.sessionId}</div>
@@ -521,7 +538,9 @@ export function renderSessionsPage(sessions: Array<{
         <button onclick="deleteSession('${s.sessionId}')" class="btn btn-ghost btn-sm text-red-400 hover:text-red-300">End Session</button>
       </td>
     </tr>
-  `).join('');
+  `
+    )
+    .join('')
 
   return `<!DOCTYPE html>
 <html lang="en" class="dark">
@@ -663,13 +682,13 @@ export function renderSessionsPage(sessions: Array<{
     }
   </script>
 </body>
-</html>`;
+</html>`
 }
 
 function formatTimeAgo(timestamp: number): string {
-  const seconds = Math.floor((Date.now() - timestamp) / 1000);
-  if (seconds < 60) return 'Just now';
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
+  const seconds = Math.floor((Date.now() - timestamp) / 1000)
+  if (seconds < 60) return 'Just now'
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`
+  return `${Math.floor(seconds / 86400)}d ago`
 }

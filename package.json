@@ -3,12 +3,16 @@
   "description": "project-global dependencies for Croquet",
   "license": "Apache-2.0",
   "private": true,
+  "scripts": {
+    "prettier": "cd workers && prettier --write ."
+  },
   "devDependencies": {
     "eslint": "^8.57.1",
     "eslint-config-airbnb-base": "^15.0.0",
     "eslint-plugin-import": "^2.31.0"
   },
   "dependencies": {
+    "prettier": "^3.7.3",
     "wrangler": "4.51.0"
   }
 }

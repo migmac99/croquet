@@ -60,19 +60,19 @@ cd workers
 Session.join({
   appId: 'com.yourapp.name',
   name: 'session-name',
-  reflector: 'wss://synq.alma.dev'
-});
+  reflector: 'wss://synq.alma.dev',
+})
 ```
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `./deploy.sh` | Deploy all workers to production |
-| `./deploy.sh staging` | Deploy to staging |
-| `./deploy.sh dev` | Run synchronizer locally |
-| `./deploy.sh sync` | Deploy only synchronizer |
-| `./deploy.sh reg` | Deploy only registry |
+| Command               | Description                      |
+| --------------------- | -------------------------------- |
+| `./deploy.sh`         | Deploy all workers to production |
+| `./deploy.sh staging` | Deploy to staging                |
+| `./deploy.sh dev`     | Run synchronizer locally         |
+| `./deploy.sh sync`    | Deploy only synchronizer         |
+| `./deploy.sh reg`     | Deploy only registry             |
 
 ## Structure
 
@@ -140,19 +140,19 @@ workers/
 
 ### Synchronizer (synq.alma.dev)
 
-| Endpoint | Protocol | Description |
-|----------|----------|-------------|
+| Endpoint                          | Protocol  | Description        |
+| --------------------------------- | --------- | ------------------ |
 | `wss://synq.alma.dev/{sessionId}` | WebSocket | Session connection |
-| `GET /health` | HTTP | Health check |
+| `GET /health`                     | HTTP      | Health check       |
 
 ### Registry (synqreg.alma.dev)
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/dispatch?session={id}` | GET | Get synchronizer URL for session |
-| `/register` | POST | Register/update session |
-| `/sessions` | GET | List active sessions |
-| `/health` | GET | Health check |
+| Endpoint                 | Method | Description                      |
+| ------------------------ | ------ | -------------------------------- |
+| `/dispatch?session={id}` | GET    | Get synchronizer URL for session |
+| `/register`              | POST   | Register/update session          |
+| `/sessions`              | GET    | List active sessions             |
+| `/health`                | GET    | Health check                     |
 
 ## Finding Zone ID
 
@@ -160,6 +160,7 @@ workers/
 2. Overview page → Right sidebar → **Zone ID**
 
 Or via CLI:
+
 ```bash
 bunx wrangler zones list | grep alma
 ```
