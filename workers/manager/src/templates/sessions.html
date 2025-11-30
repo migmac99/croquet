@@ -1,0 +1,41 @@
+<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-5 mb-10 lg:mb-12">
+  <div>
+    <h2 class="text-2xl sm:text-3xl font-bold">Sessions</h2>
+    <p class="text-sm sm:text-base text-muted-foreground mt-2">Active sessions on your cluster</p>
+  </div>
+  <button onclick="location.reload()" class="btn btn-outline w-full sm:w-auto">
+    <svg class="w-4 h-4 mr-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        stroke-width="2"
+        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+      />
+    </svg>
+    Refresh
+  </button>
+</div>
+
+<!-- Mobile card view -->
+<div class="lg:hidden space-y-5">{{session_cards}}</div>
+
+<!-- Desktop table view -->
+<div class="hidden lg:block card overflow-hidden">
+  <div class="overflow-x-auto">
+    <table class="w-full">
+      <thead class="bg-secondary/50">
+        <tr class="text-left text-sm text-muted-foreground">
+          <th class="px-6 py-4 font-medium">Session ID</th>
+          <th class="px-6 py-4 font-medium">App</th>
+          <th class="px-6 py-4 font-medium">Clients</th>
+          <th class="px-6 py-4 font-medium">Created</th>
+          <th class="px-6 py-4 font-medium">Last Activity</th>
+          <th class="px-6 py-4 font-medium">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{session_rows}}
+      </tbody>
+    </table>
+  </div>
+</div>

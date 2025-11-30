@@ -9,7 +9,8 @@ set -euo pipefail
 # Usage:
 #   ./deploy.sh              # Deploy all to production
 #   ./deploy.sh staging      # Deploy all to staging
-#   ./deploy.sh dev          # Run synchronizer locally
+#   ./deploy.sh dev          # Run all workers locally
+#   ./deploy.sh dev:sync     # Run only synchronizer locally
 #   ./deploy.sh sync         # Deploy only synchronizer
 #   ./deploy.sh reg          # Deploy only registry
 #   ./deploy.sh mgr          # Deploy only manager
@@ -154,6 +155,7 @@ new_classes = ["Synchronizer"]
 # Production environment
 # ============================================================================
 [env.production]
+name = "$name"
 routes = [
   { pattern = "$domain", custom_domain = true }
 ]
@@ -221,10 +223,26 @@ compatibility_date = "2024-11-01"
 compatibility_flags = ["nodejs_compat"]
 account_id = "$account_id"
 
+# Local dev bindings (wrangler creates local KV stores)
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "$sessions_kv_id"
+
+[[kv_namespaces]]
+binding = "APIKEYS"
+id = "$apikeys_kv_id"
+
+[vars]
+SYNCHRONIZER_URL = "ws://localhost:8787"
+CLUSTER_LABEL = "local-dev"
+SESSION_TTL_SECONDS = "3600"
+REQUIRE_API_KEY = "false"
+
 # ============================================================================
 # Production environment
 # ============================================================================
 [env.production]
+name = "$name"
 routes = [
   { pattern = "$domain", custom_domain = true }
 ]
@@ -332,10 +350,25 @@ compatibility_date = "2024-11-01"
 compatibility_flags = ["nodejs_compat"]
 account_id = "$account_id"
 
+# Local dev bindings (wrangler creates local KV stores)
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "$sessions_kv_id"
+
+[[kv_namespaces]]
+binding = "APIKEYS"
+id = "$apikeys_kv_id"
+
+[vars]
+SYNCHRONIZER_URL = "ws://localhost:8787"
+CLUSTER_LABEL = "local-dev"
+ACCESS_AUD = ""
+
 # ============================================================================
 # Production environment
 # ============================================================================
 [env.production]
+name = "$name"
 routes = [
   { pattern = "$domain", custom_domain = true }
 ]
@@ -353,7 +386,7 @@ id = "$apikeys_kv_id"
 
 [env.production.vars]
 $vars_toml
-ACCESS_AUD = ""
+ACCESS_AUD = "e17f88cd436d653b7dd5c79b1f0f3258382f9eb9ee79928a0d49e1cd7841199b"
 
 # ============================================================================
 # Staging environment
@@ -386,6 +419,7 @@ EOF
 # Deploy manager
 deploy_mgr() {
     header "Deploying Manager"
+    local domain=$(config '.manager.domain')
 
     # Reuse the same KV namespaces as registry
     setup_registry_kv
@@ -413,13 +447,51 @@ deploy_mgr() {
     echo "  6. Set ACCESS_AUD in wrangler.toml or as secret"
 }
 
-# Run locally
-run_dev() {
-    header "Starting Local Development"
+# Run single worker locally
+run_dev_sync() {
+    header "Starting Synchronizer (dev)"
     generate_sync_config
     cd "$SYNC_DIR"
     install_deps "$SYNC_DIR"
-    CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID" bunx wrangler dev
+    CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID" bunx wrangler dev --port 8787 2>&1 | sed -l 's/\[wrangler:info\] //g; s/\[wrangler:err\] //g; s/\[wrangler:warn\] //g'
+}
+
+# Run all workers locally in parallel
+run_dev_all() {
+    header "Starting Full Stack (dev)"
+
+    # Generate configs
+    setup_registry_kv
+    generate_sync_config
+    generate_reg_config "$SESSIONS_KV_ID" "$APIKEYS_KV_ID"
+    generate_mgr_config "$SESSIONS_KV_ID" "$APIKEYS_KV_ID"
+
+    # Install deps
+    install_deps "$SYNC_DIR"
+    install_deps "$REG_DIR"
+    install_deps "$MGR_DIR"
+
+    echo ""
+    echo -e "${CYAN}Starting workers on:${NC}"
+    echo "  Synchronizer: http://localhost:8787"
+    echo "  Registry:     http://localhost:8788"
+    echo "  Manager:      http://localhost:8789"
+    echo ""
+    echo -e "${YELLOW}Press Ctrl+C to stop all workers${NC}"
+    echo ""
+
+    # Trap to kill all background processes on exit
+    trap 'kill $(jobs -p) 2>/dev/null; exit' INT TERM
+
+    # Start all workers in background with colored prefixes
+    # FORCE_COLOR=1 makes wrangler output colors even when piped
+    # Strip [wrangler:*] prefix and add our own colored prefixes
+    (cd "$SYNC_DIR" && FORCE_COLOR=1 CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID" bunx wrangler dev --port 8787 --inspector-port 9229 2>&1 | sed -l 's/\[wrangler:info\] //g; s/\[wrangler:err\] //g; s/\[wrangler:warn\] //g' | sed -l $'s/^/\033[0;36m[syq] \033[0m /') &
+    (cd "$REG_DIR" && FORCE_COLOR=1 CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID" bunx wrangler dev --port 8788 --inspector-port 9230 2>&1 | sed -l 's/\[wrangler:info\] //g; s/\[wrangler:err\] //g; s/\[wrangler:warn\] //g' | sed -l $'s/^/\033[0;32m[reg] \033[0m /') &
+    (cd "$MGR_DIR" && FORCE_COLOR=1 CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID" bunx wrangler dev --port 8789 --inspector-port 9231 2>&1 | sed -l 's/\[wrangler:info\] //g; s/\[wrangler:err\] //g; s/\[wrangler:warn\] //g' | sed -l $'s/^/\033[1;33m[mgr] \033[0m /') &
+
+    # Wait for all background jobs
+    wait
 }
 
 # Print deployment info
@@ -464,7 +536,12 @@ main() {
             ;;
         dev)
             check_deps
-            run_dev
+            run_dev_all
+            exit 0
+            ;;
+        dev:sync)
+            check_deps
+            run_dev_sync
             exit 0
             ;;
         sync|synchronizer)

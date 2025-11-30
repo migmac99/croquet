@@ -1,0 +1,13 @@
+<script>
+  async function deleteSession(id) {
+    if (!confirm('End this session? All connected clients will be disconnected.')) return
+
+    try {
+      const res = await fetch('/sessions/' + encodeURIComponent(id), { method: 'DELETE' })
+      if (!res.ok) throw new Error(await res.text())
+      location.reload()
+    } catch (err) {
+      alert('Error: ' + err.message)
+    }
+  }
+</script>

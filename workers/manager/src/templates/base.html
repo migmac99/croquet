@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{title}} - Synq Manager</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            colors: {
+              border: 'hsl(240 3.7% 15.9%)',
+              input: 'hsl(240 3.7% 15.9%)',
+              ring: 'hsl(240 4.9% 83.9%)',
+              background: 'hsl(240 10% 3.9%)',
+              foreground: 'hsl(0 0% 98%)',
+              primary: { DEFAULT: 'hsl(0 0% 98%)', foreground: 'hsl(240 5.9% 10%)' },
+              secondary: { DEFAULT: 'hsl(240 3.7% 15.9%)', foreground: 'hsl(0 0% 98%)' },
+              muted: { DEFAULT: 'hsl(240 3.7% 15.9%)', foreground: 'hsl(240 5% 64.9%)' },
+              accent: { DEFAULT: 'hsl(240 5% 26%)', foreground: 'hsl(0 0% 98%)' },
+              destructive: { DEFAULT: 'hsl(0 62.8% 30.6%)', foreground: 'hsl(0 0% 98%)' },
+              card: { DEFAULT: 'hsl(240 10% 3.9%)', foreground: 'hsl(0 0% 98%)' },
+            },
+          },
+        },
+      }
+    </script>
+    <style>
+      body {
+        font-family:
+          system-ui,
+          -apple-system,
+          sans-serif;
+      }
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 0.5rem;
+        font-size: 0.875rem;
+        font-weight: 500;
+        transition: all 150ms;
+        cursor: pointer;
+      }
+      .btn:focus-visible {
+        outline: none;
+        box-shadow:
+          0 0 0 2px hsl(240 10% 3.9%),
+          0 0 0 4px hsl(240 4.9% 83.9%);
+      }
+      .btn:disabled {
+        pointer-events: none;
+        opacity: 0.5;
+      }
+      .btn-primary {
+        background-color: hsl(0 0% 98%);
+        color: hsl(240 5.9% 10%);
+        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+        height: 2.5rem;
+        padding: 0.5rem 1.25rem;
+      }
+      .btn-primary:hover {
+        background-color: hsl(0 0% 90%);
+      }
+      .btn-secondary {
+        background-color: hsl(240 3.7% 15.9%);
+        color: hsl(0 0% 98%);
+        border: 1px solid hsl(240 3.7% 15.9%);
+        box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+        height: 2.5rem;
+        padding: 0.5rem 1.25rem;
+      }
+      .btn-secondary:hover {
+        background-color: hsl(240 3.7% 20%);
+      }
+      .btn-destructive {
+        background-color: hsl(0 62.8% 30.6%);
+        color: hsl(0 0% 98%);
+        box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+        height: 2.5rem;
+        padding: 0.5rem 1.25rem;
+      }
+      .btn-destructive:hover {
+        background-color: hsl(0 62.8% 25%);
+      }
+      .btn-outline {
+        background-color: rgb(39 39 42);
+        border: 1px solid rgb(82 82 91);
+        color: hsl(0 0% 98%);
+        box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+        height: 2.5rem;
+        padding: 0.5rem 1.25rem;
+      }
+      .btn-outline:hover {
+        background-color: rgb(63 63 70);
+      }
+      .btn-ghost {
+        background-color: rgb(39 39 42 / 0.8);
+        border: 1px solid rgb(63 63 70);
+        color: hsl(0 0% 98%);
+        height: 2.5rem;
+        padding: 0.5rem 1.25rem;
+      }
+      .btn-ghost:hover {
+        background-color: rgb(63 63 70);
+        border-color: rgb(82 82 91);
+      }
+      .btn-sm {
+        height: 2rem;
+        border-radius: 0.375rem;
+        padding: 0.25rem 0.75rem;
+        font-size: 0.75rem;
+      }
+      .card {
+        border-radius: 0.75rem;
+        border: 1px solid hsl(240 3.7% 15.9%);
+        background-color: hsl(240 10% 3.9%);
+        color: hsl(0 0% 98%);
+        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+      }
+      .input {
+        display: flex;
+        height: 2.5rem;
+        width: 100%;
+        border-radius: 0.5rem;
+        border: 1px solid hsl(240 3.7% 15.9%);
+        background-color: transparent;
+        padding: 0.5rem 1rem;
+        font-size: 0.875rem;
+        box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+        transition: colors 150ms;
+        color: inherit;
+      }
+      .input::placeholder {
+        color: hsl(240 5% 64.9%);
+      }
+      .input:focus-visible {
+        outline: none;
+        box-shadow:
+          0 0 0 2px hsl(240 10% 3.9%),
+          0 0 0 4px hsl(240 4.9% 83.9%);
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 0.375rem;
+        border: 1px solid hsl(240 3.7% 15.9%);
+        padding: 0.125rem 0.625rem;
+        font-size: 0.75rem;
+        font-weight: 600;
+        transition: colors 150ms;
+      }
+      .badge-success {
+        border-color: transparent;
+        background-color: rgb(34 197 94 / 0.2);
+        color: rgb(74 222 128);
+      }
+      .badge-warning {
+        border-color: transparent;
+        background-color: rgb(234 179 8 / 0.2);
+        color: rgb(250 204 21);
+      }
+      .badge-destructive {
+        border-color: transparent;
+        background-color: rgb(239 68 68 / 0.2);
+        color: rgb(248 113 113);
+      }
+      dialog::backdrop {
+        background: rgba(0, 0, 0, 0.8);
+      }
+      dialog {
+        border-radius: 0.75rem;
+        border: 1px solid hsl(240 3.7% 15.9%);
+        background-color: hsl(240 10% 3.9%);
+        padding: 0;
+        color: hsl(0 0% 98%);
+        box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1);
+      }
+    </style>
+  </head>
+  <body class="bg-background text-foreground min-h-screen">
+    <div class="flex min-h-screen">
+      <!-- Mobile overlay -->
+      <div id="sidebarOverlay" class="fixed inset-0 bg-black/50 z-40 lg:hidden opacity-0 invisible transition-all duration-200" onclick="closeSidebar()"></div>
+
+      <!-- Sidebar -->
+      <aside
+        id="sidebar"
+        class="fixed lg:static inset-y-0 left-0 z-50 w-64 border-r border-border bg-background p-6 flex flex-col -translate-x-full lg:translate-x-0 transition-transform duration-200"
+      >
+        <div class="mb-8">
+          <div class="flex items-center justify-between">
+            <h1 class="text-xl font-bold flex items-center gap-2">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              Synq Manager
+            </h1>
+            <button onclick="closeSidebar()" class="lg:hidden p-2 bg-secondary border border-border hover:bg-accent rounded-lg transition-colors">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          <p class="text-sm text-muted-foreground mt-1">{{cluster}}</p>
+        </div>
+
+        <nav class="space-y-2 flex-1">
+          <a href="/" onclick="closeSidebar()" class="flex items-center gap-3 px-5 py-3 rounded-lg {{nav_dashboard_active}} transition-colors">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"
+              />
+            </svg>
+            Dashboard
+          </a>
+          <a href="/ui/keys" onclick="closeSidebar()" class="flex items-center gap-3 px-5 py-3 rounded-lg {{nav_keys_active}} transition-colors">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"
+              />
+            </svg>
+            API Keys
+          </a>
+          <a href="/ui/sessions" onclick="closeSidebar()" class="flex items-center gap-3 px-5 py-3 rounded-lg {{nav_sessions_active}} transition-colors">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"
+              />
+            </svg>
+            Sessions
+          </a>
+        </nav>
+
+        <div class="pt-6 border-t border-border">
+          <div class="flex items-center gap-3 px-5 py-3">
+            <div class="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-sm font-medium">{{user_initial}}</div>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium truncate">{{user}}</p>
+              <p class="text-xs text-muted-foreground">Admin</p>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Mobile header -->
+      <div class="lg:hidden fixed top-0 left-0 right-0 z-30 bg-background border-b border-border px-4 py-3 flex items-center gap-3">
+        <button onclick="toggleSidebar()" class="p-2.5 bg-secondary border border-border hover:bg-accent rounded-lg transition-colors">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+        <h1 class="font-semibold text-lg">{{title}}</h1>
+      </div>
+
+      <!-- Main content -->
+      <main class="flex-1 p-6 sm:p-10 lg:p-12 pt-20 sm:pt-20 lg:pt-12">
+        <div class="max-w-6xl mx-auto">{{content}}</div>
+      </main>
+    </div>
+
+    <script>
+      function toggleSidebar() {
+        const sidebar = document.getElementById('sidebar')
+        const overlay = document.getElementById('sidebarOverlay')
+        sidebar.classList.toggle('-translate-x-full')
+        sidebar.classList.toggle('translate-x-0')
+        overlay.classList.toggle('opacity-0')
+        overlay.classList.toggle('invisible')
+      }
+      function closeSidebar() {
+        const sidebar = document.getElementById('sidebar')
+        const overlay = document.getElementById('sidebarOverlay')
+        sidebar.classList.add('-translate-x-full')
+        sidebar.classList.remove('translate-x-0')
+        overlay.classList.add('opacity-0')
+        overlay.classList.add('invisible')
+      }
+    </script>
+    {{scripts}}
+  </body>
+</html>

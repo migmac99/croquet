@@ -143,9 +143,18 @@ export default {
     // Health check (unauthenticated)
     if (path === '/health') return json({ status: 'ok', service: 'synqmanager' })
 
-    // Verify Cloudflare Access authentication
-    const user = await verifyAccessJWT(request, env)
-    if (!user) return error('Unauthorized - Cloudflare Access authentication required', 401)
+    // Skip auth for localhost (dev mode)
+    const isLocalhost = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
+    let user: AuthenticatedUser | null = null
+
+    if (isLocalhost) {
+      // Dev mode - use mock user
+      user = { email: 'dev@localhost', sub: 'dev' }
+    } else {
+      // Production - verify Cloudflare Access JWT
+      user = await verifyAccessJWT(request, env)
+      if (!user) return error('Unauthorized - Cloudflare Access authentication required', 401)
+    }
 
     // Route requests
     try {
@@ -405,15 +414,16 @@ async function getDashboardUI(env: Env, user: AuthenticatedUser): Promise<Respon
   let apiKeyCount = 0
   let activeKeyCount = 0
   let cursor: string | undefined
+  let listResult: KVNamespaceListResult<unknown>
 
   do {
-    const result = await env.APIKEYS.list({ prefix: 'id:', cursor })
-    for (const key of result.keys) {
+    listResult = await env.APIKEYS.list({ prefix: 'id:', cursor })
+    for (const key of listResult.keys) {
       apiKeyCount++
       const record = await env.APIKEYS.get<ApiKeyRecord>(key.name, 'json')
       if (record?.active) activeKeyCount++
     }
-    cursor = result.list_complete ? undefined : result.cursor
+    cursor = listResult.list_complete ? undefined : listResult.cursor
   } while (cursor)
 
   // Count sessions
@@ -422,13 +432,13 @@ async function getDashboardUI(env: Env, user: AuthenticatedUser): Promise<Respon
   cursor = undefined
 
   do {
-    const result = await env.SESSIONS.list({ cursor })
-    for (const key of result.keys) {
+    listResult = await env.SESSIONS.list({ cursor })
+    for (const key of listResult.keys) {
       sessionCount++
       const record = await env.SESSIONS.get<SessionRecord>(key.name, 'json')
       if (record) totalClients += record.clientCount
     }
-    cursor = result.list_complete ? undefined : result.cursor
+    cursor = listResult.list_complete ? undefined : listResult.cursor
   } while (cursor)
 
   return html(

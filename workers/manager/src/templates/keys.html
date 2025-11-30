@@ -1,0 +1,91 @@
+<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-5 mb-10 lg:mb-12">
+  <div>
+    <h2 class="text-2xl sm:text-3xl font-bold">API Keys</h2>
+    <p class="text-sm sm:text-base text-muted-foreground mt-2">Manage API keys for your applications</p>
+  </div>
+  <button onclick="document.getElementById('createDialog').showModal()" class="btn btn-primary w-full sm:w-auto">
+    <svg class="w-4 h-4 mr-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+    </svg>
+    Create Key
+  </button>
+</div>
+
+<!-- Mobile card view -->
+<div class="lg:hidden space-y-5">{{key_cards}}</div>
+
+<!-- Desktop table view -->
+<div class="hidden lg:block card overflow-hidden">
+  <div class="overflow-x-auto">
+    <table class="w-full">
+      <thead class="bg-secondary/50">
+        <tr class="text-left text-sm text-muted-foreground">
+          <th class="px-6 py-4 font-medium">Name</th>
+          <th class="px-6 py-4 font-medium">Allowed Domains</th>
+          <th class="px-6 py-4 font-medium">Tier</th>
+          <th class="px-6 py-4 font-medium">Status</th>
+          <th class="px-6 py-4 font-medium">Usage</th>
+          <th class="px-6 py-4 font-medium">Last Used</th>
+          <th class="px-6 py-4 font-medium">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{key_rows}}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Create Key Dialog -->
+<dialog id="createDialog" class="p-4 sm:p-6 w-[calc(100%-2rem)] max-w-lg">
+  <form method="dialog" id="createForm">
+    <h3 class="text-lg font-semibold mb-4">Create API Key</h3>
+
+    <div class="space-y-4">
+      <div>
+        <label class="text-sm font-medium mb-2 block">Name</label>
+        <input type="text" name="name" required class="input" placeholder="My App" />
+      </div>
+
+      <div>
+        <label class="text-sm font-medium mb-2 block">Allowed Domains</label>
+        <input type="text" name="domains" required class="input" placeholder="localhost:*, *.myapp.com" />
+        <p class="text-xs text-muted-foreground mt-1">Comma-separated. Supports wildcards: *, *.domain.com, localhost:*</p>
+      </div>
+
+      <div>
+        <label class="text-sm font-medium mb-2 block">Tier</label>
+        <select name="tier" class="input">
+          <option value="free">Free</option>
+          <option value="pro">Pro</option>
+          <option value="enterprise">Enterprise</option>
+          <option value="unlimited">Unlimited</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="flex flex-col-reverse sm:flex-row justify-end gap-3 mt-6">
+      <button type="button" onclick="document.getElementById('createDialog').close()" class="btn btn-ghost">Cancel</button>
+      <button type="submit" class="btn btn-primary">Create Key</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Key Created Dialog -->
+<dialog id="keyCreatedDialog" class="p-4 sm:p-6 w-[calc(100%-2rem)] max-w-lg">
+  <h3 class="text-lg font-semibold mb-4">API Key Created</h3>
+  <p class="text-sm text-muted-foreground mb-4">Save this key now. You won't be able to see it again!</p>
+  <div class="bg-secondary p-3 sm:p-4 rounded-md font-mono text-xs sm:text-sm break-all" id="newKeyDisplay"></div>
+  <div class="flex flex-col-reverse sm:flex-row justify-end gap-3 mt-6">
+    <button onclick="copyKey()" class="btn btn-secondary">Copy</button>
+    <button
+      onclick="
+        document.getElementById('keyCreatedDialog').close()
+        location.reload()
+      "
+      class="btn btn-primary"
+    >
+      Done
+    </button>
+  </div>
+</dialog>

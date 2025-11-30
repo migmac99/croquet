@@ -1,0 +1,16 @@
+{
+  "name": "workers",
+  "description": "",
+  "private": true,
+  "scripts": {
+    "prettier": "prettier --write .",
+    "dev": "bun run prettier && ./deploy.sh dev",
+    "dev:sync": "bun run prettier && ./deploy.sh dev:sync",
+    "deploy": "bun run prettier && ./deploy.sh all",
+    "deploy:staging": "bun run prettier && ./deploy.sh staging",
+    "install": "cd manager && bun i && cd ../registry && bun i && cd ../synchronizer && bun i"
+  },
+  "devDependencies": {
+    "wrangler": "4.51.0"
+  }
+}

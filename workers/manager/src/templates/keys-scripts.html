@@ -1,0 +1,66 @@
+<script>
+  let newKey = ''
+
+  document.getElementById('createForm').addEventListener('submit', async (e) => {
+    e.preventDefault()
+    const form = e.target
+    const data = {
+      name: form.name.value,
+      allowedDomains: form.domains.value
+        .split(',')
+        .map((d) => d.trim())
+        .filter(Boolean),
+      tier: form.tier.value,
+    }
+
+    try {
+      const res = await fetch('/keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      })
+
+      if (!res.ok) throw new Error(await res.text())
+
+      const result = await res.json()
+      newKey = result.key
+      document.getElementById('newKeyDisplay').textContent = newKey
+      document.getElementById('createDialog').close()
+      document.getElementById('keyCreatedDialog').showModal()
+    } catch (err) {
+      alert('Error creating key: ' + err.message)
+    }
+  })
+
+  function copyKey() {
+    navigator.clipboard.writeText(newKey)
+  }
+
+  async function toggleKey(id, active) {
+    if (!confirm(`${active ? 'Enable' : 'Disable'} this API key?`)) return
+
+    try {
+      const res = await fetch('/keys/' + id, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active }),
+      })
+      if (!res.ok) throw new Error(await res.text())
+      location.reload()
+    } catch (err) {
+      alert('Error: ' + err.message)
+    }
+  }
+
+  async function deleteKey(id) {
+    if (!confirm('Delete this API key? This cannot be undone.')) return
+
+    try {
+      const res = await fetch('/keys/' + id, { method: 'DELETE' })
+      if (!res.ok) throw new Error(await res.text())
+      location.reload()
+    } catch (err) {
+      alert('Error: ' + err.message)
+    }
+  }
+</script>
