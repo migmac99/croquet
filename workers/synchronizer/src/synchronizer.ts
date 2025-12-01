@@ -7,6 +7,7 @@ const SNAPSHOT_PRUNE_INTERVAL_MS = 300000 // 5 minutes
 const MAX_MESSAGES = 100000 // Max messages to retain since last snapshot (matches original)
 const REQU_SNAPSHOT = 60000 // Request snapshot if this many messages retained (matches original)
 const INITIAL_SEQ = 0xfffffff0 >>> 0 // 4294967280 - matches original reflector island.js
+const USERS_INTERVAL = 200 // Batch users events within 200ms (matches original reflector)
 
 /** Generate a random timeline identifier for seamless rejoin support */
 function generateTimeline(): string {
@@ -85,6 +86,7 @@ export class Synchronizer extends DurableObject<Env> {
   private lastSnapshotPrune = 0
   private pendingSnapshot: { clientId: string; time: number } | null = null
   private sessionName: string | null = null // Logical session name (from URL path)
+  private usersTimer: ReturnType<typeof setTimeout> | null = null // Timer for batched users events
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
@@ -220,10 +222,9 @@ export class Synchronizer extends DurableObject<Env> {
 
     console.log(`[${this.sessionId}] Client disconnected: ${clientId} (${code}: ${reason})`)
 
-    // Send users left event if client had joined
+    // Queue users left event if client had joined (batched like original reflector)
     if (attachment?.joined && userId) {
-      // Use setTimeout to let the socket be removed from the list first
-      setTimeout(() => this.sendUsersEvent([], [userId]), 0)
+      this.queueUserLeave(userId)
     }
 
     // Check if session is now empty
@@ -286,8 +287,16 @@ export class Synchronizer extends DurableObject<Env> {
     const flags = args.flags as Record<string, unknown> | undefined
     const ticks = args.ticks as { tick?: number; delay?: number } | undefined
 
-    // Track if this is the first client (before state initialization)
-    const isFirstClient = !this.state
+    // Check if this is effectively the first client:
+    // - No state exists (never had a session), OR
+    // - State exists but no other clients are currently joined
+    // This handles reconnection to a stale session that was hibernated
+    const otherJoinedClients = this.ctx.getWebSockets().filter((s) => {
+      if (s === ws) return false // Exclude self
+      const att = s.deserializeAttachment() as WSAttachment
+      return att?.joined
+    })
+    const isEffectivelyFirstClient = !this.state || otherJoinedClients.length === 0
 
     // Initialize session state if first client
     if (!this.state) {
@@ -346,22 +355,40 @@ export class Synchronizer extends DurableObject<Env> {
     if (clientMustInitFresh) {
       // No snapshot - client will init fresh
       // For late joiners: keep messages if they start at the right seq for catchup
-      // For first client: start with empty messages
-      if (isFirstClient) {
+      // For first client (or reconnect to empty session): start with empty messages
+      if (isEffectivelyFirstClient) {
         this.state.messages = []
         this.state.seq = INITIAL_SEQ
+        // Clear any pending users batch (stale from previous session)
+        this.state.usersJoined = []
+        this.state.usersLeft = []
+        if (this.usersTimer) {
+          clearTimeout(this.usersTimer)
+          this.usersTimer = null
+        }
       } else {
         // Late joiner without snapshot - check if messages can be replayed
-        // Messages should start at INITIAL_SEQ+1 for valid catchup
-        const firstMsgSeq = (this.state.messages[0] as number[] | undefined)?.[1]
-        if (firstMsgSeq !== (INITIAL_SEQ + 1) >>> 0) {
-          // Messages can't be used for catchup - reset
-          console.log(`[${this.sessionId}] Resetting session - messages start at ${firstMsgSeq}, expected ${(INITIAL_SEQ + 1) >>> 0}`)
-          this.state.messages = []
-          this.state.seq = INITIAL_SEQ
-          // Generate new timeline to force all clients to reconnect fresh
-          this.state.timeline = generateTimeline()
+        // If messages is empty, that's fine (fresh session, no messages yet)
+        // If messages exist but start at wrong seq, reset (stale session)
+        if (this.state.messages.length > 0) {
+          const firstMsgSeq = (this.state.messages[0] as number[] | undefined)?.[1]
+          if (firstMsgSeq !== (INITIAL_SEQ + 1) >>> 0) {
+            // Messages can't be used for catchup - reset
+            console.log(`[${this.sessionId}] Resetting session - messages start at ${firstMsgSeq}, expected ${(INITIAL_SEQ + 1) >>> 0}`)
+            this.state.messages = []
+            this.state.seq = INITIAL_SEQ
+            // Generate new timeline to force all clients to reconnect fresh
+            this.state.timeline = generateTimeline()
+            // Clear any pending users batch (stale from previous session)
+            this.state.usersJoined = []
+            this.state.usersLeft = []
+            if (this.usersTimer) {
+              clearTimeout(this.usersTimer)
+              this.usersTimer = null
+            }
+          }
         }
+        // If messages is empty, that's fine - it's a fresh session with no messages yet
       }
     }
 
@@ -396,17 +423,30 @@ export class Synchronizer extends DurableObject<Env> {
       args: syncArgs,
     }
 
+    // Debug: log SYNC details
+    console.log(
+      `[${this.sessionId}] Sending SYNC: url=${snapshotUrl ? '<snapshot>' : '<none>'}, ` +
+        `time=${syncTime}, seq=${syncSeq}, messages=${this.state.messages.length}, timeline=${this.state.timeline.slice(0, 8)}`
+    )
+
     ws.send(JSON.stringify(syncResponse))
 
-    // Schedule users event (matches original reflector behavior)
-    // The users event is broadcast to ALL clients and buffered for late-joiners
-    // Use setTimeout to ensure joining client has processed SYNC first
-    setTimeout(() => this.sendUsersEvent([attachment.userId], []), 0)
+    // Queue user join for batched users event (matches original reflector)
+    // The original reflector batches joins/leaves and sends them together
+    if (attachment.userId) {
+      this.queueUserJoin(attachment.userId)
+    }
 
     // Ensure ticking
     this.scheduleTick()
 
-    console.log(`[${this.sessionId}] JOIN from ${attachment.clientId} (user: ${args.user})`)
+    // Debug: log session state for troubleshooting
+    console.log(
+      `[${this.sessionId}] JOIN from ${attachment.clientId} (user: ${args.user}), ` +
+        `isEffectivelyFirstClient=${isEffectivelyFirstClient}, clientMustInitFresh=${clientMustInitFresh}, ` +
+        `seq=${this.state.seq}, messages=${this.state.messages.length}, ` +
+        `syncSeq=${syncSeq}, syncTime=${syncTime}`
+    )
   }
 
   /**
@@ -443,6 +483,12 @@ export class Synchronizer extends DurableObject<Env> {
     // Build message in raw format: [time, seq, payload]
     const message = [time, this.state.seq, payload]
 
+    // Debug: log users event details
+    console.log(
+      `[${this.sessionId}] USERS event: time=${time}, seq=${this.state.seq}, ` +
+        `active=${active}, total=${total}, joined=${JSON.stringify(joined)}, left=${JSON.stringify(left)}`
+    )
+
     // Broadcast RECV to all active clients
     const recvMsg = {
       id: this.sessionId,
@@ -458,6 +504,77 @@ export class Synchronizer extends DurableObject<Env> {
 
     // Persist state
     this.ctx.storage.put('state', this.state)
+  }
+
+  /**
+   * Queue a user join for batched users event (matches original reflector)
+   * The original reflector batches joins/leaves within USERS_INTERVAL
+   */
+  private queueUserJoin(userId: string): void {
+    if (!this.state) return
+    if (!this.state.usersJoined) this.state.usersJoined = []
+    if (!this.state.usersLeft) this.state.usersLeft = []
+
+    // If user was in left array, remove from there instead of adding to joined
+    const leftIdx = this.state.usersLeft.indexOf(userId)
+    if (leftIdx !== -1) {
+      this.state.usersLeft.splice(leftIdx, 1)
+    } else {
+      // Only add if not already in joined array
+      if (!this.state.usersJoined.includes(userId)) {
+        this.state.usersJoined.push(userId)
+      }
+    }
+    this.scheduleUsersEvent()
+  }
+
+  /**
+   * Queue a user leave for batched users event (matches original reflector)
+   */
+  private queueUserLeave(userId: string): void {
+    if (!this.state) return
+    if (!this.state.usersJoined) this.state.usersJoined = []
+    if (!this.state.usersLeft) this.state.usersLeft = []
+
+    // If user was in joined array, remove from there instead of adding to left
+    const joinedIdx = this.state.usersJoined.indexOf(userId)
+    if (joinedIdx !== -1) {
+      this.state.usersJoined.splice(joinedIdx, 1)
+    } else {
+      // Only add if not already in left array
+      if (!this.state.usersLeft.includes(userId)) {
+        this.state.usersLeft.push(userId)
+      }
+    }
+    this.scheduleUsersEvent()
+  }
+
+  /**
+   * Schedule flushing of batched users events (matches original reflector USERS_INTERVAL)
+   */
+  private scheduleUsersEvent(): void {
+    if (this.usersTimer) return // Already scheduled
+    this.usersTimer = setTimeout(() => this.flushUsersEvent(), USERS_INTERVAL)
+  }
+
+  /**
+   * Flush batched users events (called after USERS_INTERVAL)
+   */
+  private flushUsersEvent(): void {
+    this.usersTimer = null
+    if (!this.state) return
+
+    const joined = this.state.usersJoined || []
+    const left = this.state.usersLeft || []
+
+    // Clear the batched arrays
+    this.state.usersJoined = []
+    this.state.usersLeft = []
+
+    // Send the batched users event
+    if (joined.length > 0 || left.length > 0) {
+      this.sendUsersEvent(joined, left)
+    }
   }
 
   /**
@@ -521,6 +638,9 @@ export class Synchronizer extends DurableObject<Env> {
 
     // Build message in raw format: [time, seq, ...payload]
     const message = [time, this.state.seq, ...args]
+
+    // Debug: log SEND message received
+    console.log(`[${this.sessionId}] SEND: time=${time}, seq=${this.state.seq}, payload=${JSON.stringify(args).slice(0, 100)}`)
 
     // Broadcast RECV to all clients (official format)
     const recvMsg = {

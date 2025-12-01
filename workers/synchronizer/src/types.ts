@@ -53,6 +53,9 @@ export interface SessionState {
   lastTick: number // Time of last tick
   lastMsgTime: number // Time of last message
   messages: unknown[][] // Buffered messages since last snapshot for late-joiner catchup
+  // Users event batching (matches original reflector)
+  usersJoined?: string[] // Users who joined since last users event
+  usersLeft?: string[] // Users who left since last users event
 }
 
 // Snapshot metadata
