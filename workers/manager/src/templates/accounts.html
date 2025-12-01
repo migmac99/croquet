@@ -1,0 +1,142 @@
+<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-5 mb-10 lg:mb-12">
+  <div>
+    <h2 class="text-2xl sm:text-3xl font-bold">Accounts</h2>
+    <p class="text-sm sm:text-base text-muted-foreground mt-2">Manage sub-accounts for DePIN API access</p>
+  </div>
+  <button onclick="document.getElementById('createDialog').showModal()" class="btn btn-primary w-full sm:w-auto">
+    <svg class="w-4 h-4 mr-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+    </svg>
+    Create Account
+  </button>
+</div>
+
+<!-- Mobile card view -->
+<div class="lg:hidden space-y-5">{{account_cards}}</div>
+
+<!-- Desktop table view -->
+<div class="hidden lg:block card overflow-hidden">
+  <div class="overflow-x-auto">
+    <table class="w-full">
+      <thead class="bg-secondary/50">
+        <tr class="text-left text-sm text-muted-foreground">
+          <th class="px-6 py-4 font-medium">Name</th>
+          <th class="px-6 py-4 font-medium">Account ID</th>
+          <th class="px-6 py-4 font-medium">Status</th>
+          <th class="px-6 py-4 font-medium">Created</th>
+          <th class="px-6 py-4 font-medium">Last Used</th>
+          <th class="px-6 py-4 font-medium">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{account_rows}}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Create Account Dialog -->
+<dialog id="createDialog" class="p-4 sm:p-6 w-[calc(100%-2rem)] max-w-lg">
+  <form method="dialog" id="createForm">
+    <h3 class="text-lg font-semibold mb-4">Create Account</h3>
+
+    <div class="space-y-4">
+      <div>
+        <label class="text-sm font-medium mb-2 block">Name</label>
+        <input type="text" name="name" required class="input" placeholder="My Application" />
+      </div>
+
+      <div>
+        <label class="text-sm font-medium mb-2 block">Description (optional)</label>
+        <input type="text" name="description" class="input" placeholder="Used for production app" />
+      </div>
+    </div>
+
+    <div class="flex flex-col-reverse sm:flex-row justify-end gap-3 mt-6">
+      <button type="button" onclick="document.getElementById('createDialog').close()" class="btn btn-ghost">Cancel</button>
+      <button type="submit" class="btn btn-primary">Create Account</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Account Created Dialog -->
+<dialog id="accountCreatedDialog" class="p-4 sm:p-6 w-[calc(100%-2rem)] max-w-lg">
+  <h3 class="text-lg font-semibold mb-4">Account Created</h3>
+  <p class="text-sm text-muted-foreground mb-4">Save these credentials now. The secret won't be shown again!</p>
+
+  <div class="space-y-4">
+    <div>
+      <label class="text-sm font-medium mb-2 block text-muted-foreground">Account ID</label>
+      <div class="bg-secondary p-3 rounded-md font-mono text-sm break-all" id="newAccountId"></div>
+    </div>
+    <div>
+      <label class="text-sm font-medium mb-2 block text-muted-foreground">Secret (Bearer Token)</label>
+      <div class="bg-secondary p-3 rounded-md font-mono text-xs break-all" id="newAccountSecret"></div>
+    </div>
+  </div>
+
+  <div class="flex flex-col-reverse sm:flex-row justify-end gap-3 mt-6">
+    <button onclick="copyCredentials()" class="btn btn-secondary">Copy Both</button>
+    <button
+      onclick="
+        document.getElementById('accountCreatedDialog').close()
+        location.reload()
+      "
+      class="btn btn-primary"
+    >
+      Done
+    </button>
+  </div>
+</dialog>
+
+<!-- Edit Account Dialog -->
+<dialog id="editDialog" class="p-4 sm:p-6 w-[calc(100%-2rem)] max-w-lg">
+  <form method="dialog" id="editForm">
+    <h3 class="text-lg font-semibold mb-4">Edit Account</h3>
+    <input type="hidden" name="id" id="editAccountId" />
+
+    <div class="space-y-4">
+      <div>
+        <label class="text-sm font-medium mb-2 block">Name</label>
+        <input type="text" name="name" id="editAccountName" required class="input" placeholder="My Application" />
+      </div>
+
+      <div>
+        <label class="text-sm font-medium mb-2 block">Description</label>
+        <input type="text" name="description" id="editAccountDescription" class="input" placeholder="Used for production app" />
+      </div>
+
+      <div>
+        <label class="text-sm font-medium mb-2 block">Status</label>
+        <select name="active" id="editAccountActive" class="input">
+          <option value="true">Active</option>
+          <option value="false">Inactive</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="flex flex-col-reverse sm:flex-row justify-end gap-3 mt-6">
+      <button type="button" onclick="document.getElementById('editDialog').close()" class="btn btn-ghost">Cancel</button>
+      <button type="submit" class="btn btn-primary">Save Changes</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- New Secret Dialog -->
+<dialog id="newSecretDialog" class="p-4 sm:p-6 w-[calc(100%-2rem)] max-w-lg">
+  <h3 class="text-lg font-semibold mb-4">New Secret Generated</h3>
+  <p class="text-sm text-muted-foreground mb-4">Save this secret now. It won't be shown again!</p>
+  <div class="bg-secondary p-3 sm:p-4 rounded-md font-mono text-xs break-all" id="rolledSecret"></div>
+  <div class="flex flex-col-reverse sm:flex-row justify-end gap-3 mt-6">
+    <button onclick="copyRolledSecret()" class="btn btn-secondary">Copy</button>
+    <button
+      onclick="
+        document.getElementById('newSecretDialog').close()
+        location.reload()
+      "
+      class="btn btn-primary"
+    >
+      Done
+    </button>
+  </div>
+</dialog>

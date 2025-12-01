@@ -48,6 +48,10 @@
       },
       "apikeys": {
         "namespace": "synq-keys"
+      },
+      "accounts": {
+        "namespace": "synq-accounts",
+        "createIfMissing": true
       }
     },
     "vars": {

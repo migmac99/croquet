@@ -1,0 +1,115 @@
+<script>
+  let newAccountId = ''
+  let newAccountSecret = ''
+
+  document.getElementById('createForm').addEventListener('submit', async (e) => {
+    e.preventDefault()
+    const form = e.target
+    const data = {
+      name: form.name.value,
+      description: form.description.value || undefined,
+    }
+
+    try {
+      const res = await fetch('/accounts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      })
+
+      if (!res.ok) throw new Error(await res.text())
+
+      const result = await res.json()
+      newAccountId = result.id
+      newAccountSecret = result.secret
+      document.getElementById('newAccountId').textContent = newAccountId
+      document.getElementById('newAccountSecret').textContent = newAccountSecret
+      document.getElementById('createDialog').close()
+      document.getElementById('accountCreatedDialog').showModal()
+    } catch (err) {
+      alert('Error creating account: ' + err.message)
+    }
+  })
+
+  function copyCredentials() {
+    const text = `Account ID: ${newAccountId}\nSecret: ${newAccountSecret}`
+    navigator.clipboard.writeText(text)
+  }
+
+  function copyRolledSecret() {
+    navigator.clipboard.writeText(document.getElementById('rolledSecret').textContent)
+  }
+
+  async function editAccount(id) {
+    try {
+      const res = await fetch('/accounts/' + id)
+      if (!res.ok) throw new Error(await res.text())
+
+      const account = await res.json()
+
+      // Populate form fields
+      document.getElementById('editAccountId').value = account.id
+      document.getElementById('editAccountName').value = account.name
+      document.getElementById('editAccountDescription').value = account.description || ''
+      document.getElementById('editAccountActive').value = account.active ? 'true' : 'false'
+
+      document.getElementById('editDialog').showModal()
+    } catch (err) {
+      alert('Error loading account: ' + err.message)
+    }
+  }
+
+  document.getElementById('editForm').addEventListener('submit', async (e) => {
+    e.preventDefault()
+    const form = e.target
+    const id = form.id.value
+
+    const data = {
+      name: form.name.value,
+      description: form.description.value || undefined,
+      active: form.active.value === 'true',
+    }
+
+    try {
+      const res = await fetch('/accounts/' + id, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      })
+
+      if (!res.ok) throw new Error(await res.text())
+
+      document.getElementById('editDialog').close()
+      location.reload()
+    } catch (err) {
+      alert('Error updating account: ' + err.message)
+    }
+  })
+
+  async function rollSecret(id) {
+    if (!confirm('Generate a new secret? The old secret will stop working immediately.')) return
+
+    try {
+      const res = await fetch('/accounts/' + id + '/roll', { method: 'POST' })
+      if (!res.ok) throw new Error(await res.text())
+
+      const result = await res.json()
+      document.getElementById('rolledSecret').textContent = result.secret
+      document.getElementById('newSecretDialog').showModal()
+    } catch (err) {
+      alert('Error: ' + err.message)
+    }
+  }
+
+  async function deleteAccount(id) {
+    if (!confirm('Delete this account? This will also affect any API keys associated with it. This cannot be undone.')) return
+
+    try {
+      const res = await fetch('/accounts/' + id, { method: 'DELETE' })
+      if (!res.ok) throw new Error(await res.text())
+      location.reload()
+    } catch (err) {
+      alert('Error: ' + err.message)
+    }
+  }
+</script>

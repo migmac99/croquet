@@ -128,6 +128,27 @@ setup_registry_kv() {
     APIKEYS_KV_ID=$(setup_kv_namespace "$apikeys_ns")
 }
 
+# Setup manager KV namespaces (includes accounts)
+setup_manager_kv() {
+    local sessions_ns=$(config '.manager.kv.sessions.namespace')
+    local apikeys_ns=$(config '.manager.kv.apikeys.namespace')
+    local accounts_ns=$(config '.manager.kv.accounts.namespace')
+
+    # Reuse registry KV IDs for sessions and apikeys
+    SESSIONS_KV_ID=$(setup_kv_namespace "$sessions_ns")
+    APIKEYS_KV_ID=$(setup_kv_namespace "$apikeys_ns")
+
+    # Setup accounts KV (manager-specific)
+    if [ -n "$accounts_ns" ]; then
+        ACCOUNTS_KV_ID=$(setup_kv_namespace "$accounts_ns")
+        # Fallback for local dev - wrangler will create local storage with any ID
+        if [ -z "$ACCOUNTS_KV_ID" ]; then
+            ACCOUNTS_KV_ID="synq-accounts-local-dev"
+            warn "Using placeholder ID for accounts KV (local dev only)"
+        fi
+    fi
+}
+
 # Generate synchronizer wrangler.toml from config
 generate_sync_config() {
     local apikeys_kv_id="$1"
@@ -370,6 +391,7 @@ deploy_reg() {
 generate_mgr_config() {
     local sessions_kv_id="$1"
     local apikeys_kv_id="$2"
+    local accounts_kv_id="$3"
     local account_id=$(config '.accountId')
     local name=$(config '.manager.name')
     local domain=$(config '.manager.domain')
@@ -394,6 +416,10 @@ id = "$sessions_kv_id"
 [[kv_namespaces]]
 binding = "APIKEYS"
 id = "$apikeys_kv_id"
+
+[[kv_namespaces]]
+binding = "ACCOUNTS"
+id = "$accounts_kv_id"
 
 [vars]
 SYNCHRONIZER_URL = "ws://localhost:8787"
@@ -420,6 +446,10 @@ id = "$sessions_kv_id"
 binding = "APIKEYS"
 id = "$apikeys_kv_id"
 
+[[env.production.kv_namespaces]]
+binding = "ACCOUNTS"
+id = "$accounts_kv_id"
+
 [env.production.vars]
 $vars_toml
 ACCESS_AUD = "e17f88cd436d653b7dd5c79b1f0f3258382f9eb9ee79928a0d49e1cd7841199b"
@@ -444,6 +474,10 @@ id = "$sessions_kv_id"
 binding = "APIKEYS"
 id = "$apikeys_kv_id"
 
+[[env.staging.kv_namespaces]]
+binding = "ACCOUNTS"
+id = "$accounts_kv_id"
+
 [env.staging.vars]
 $vars_toml
 ACCESS_AUD = ""
@@ -457,9 +491,9 @@ deploy_mgr() {
     header "Deploying Manager"
     local domain=$(config '.manager.domain')
 
-    # Reuse the same KV namespaces as registry
-    setup_registry_kv
-    generate_mgr_config "$SESSIONS_KV_ID" "$APIKEYS_KV_ID"
+    # Setup manager KV namespaces (includes accounts)
+    setup_manager_kv
+    generate_mgr_config "$SESSIONS_KV_ID" "$APIKEYS_KV_ID" "$ACCOUNTS_KV_ID"
 
     cd "$MGR_DIR"
     install_deps "$MGR_DIR"
@@ -499,9 +533,10 @@ run_dev_all() {
 
     # Generate configs
     setup_registry_kv
+    setup_manager_kv  # Also sets up ACCOUNTS_KV_ID
     generate_sync_config "$APIKEYS_KV_ID"
     generate_reg_config "$SESSIONS_KV_ID" "$APIKEYS_KV_ID"
-    generate_mgr_config "$SESSIONS_KV_ID" "$APIKEYS_KV_ID"
+    generate_mgr_config "$SESSIONS_KV_ID" "$APIKEYS_KV_ID" "$ACCOUNTS_KV_ID"
 
     # Install deps
     install_deps "$SYNC_DIR"

@@ -10,4 +10,32 @@
       alert('Error: ' + err.message)
     }
   }
+
+  function filterByAccount(accountId) {
+    // Filter mobile cards
+    document.querySelectorAll('[data-account-id]').forEach((el) => {
+      const match = !accountId || el.dataset.accountId === accountId
+      el.style.display = match ? '' : 'none'
+    })
+
+    // Update empty state visibility
+    const mobileContainer = document.querySelector('.lg\\:hidden.space-y-5')
+    const tableBody = document.querySelector('tbody')
+
+    if (mobileContainer) {
+      const visibleCards = mobileContainer.querySelectorAll('[data-account-id]:not([style*="display: none"])')
+      const emptyCard = mobileContainer.querySelector('.text-center')
+      if (emptyCard && !emptyCard.dataset.accountId) {
+        emptyCard.style.display = visibleCards.length === 0 ? '' : 'none'
+      }
+    }
+
+    if (tableBody) {
+      const visibleRows = tableBody.querySelectorAll('tr[data-account-id]:not([style*="display: none"])')
+      const emptyRow = tableBody.querySelector('tr:not([data-account-id])')
+      if (emptyRow) {
+        emptyRow.style.display = visibleRows.length === 0 ? '' : 'none'
+      }
+    }
+  }
 </script>

@@ -636,11 +636,14 @@ export class Synchronizer extends DurableObject<Env> {
     this.state.seq = (this.state.seq + 1) >>> 0
     this.state.lastActivity = now()
 
-    // Build message in raw format: [time, seq, ...payload]
-    const message = [time, this.state.seq, ...args]
+    // The client sends args = [time, seq, payload, ...] where time/seq are placeholders
+    // We overwrite positions 0 and 1 with authoritative values (matches original reflector)
+    const message = args as unknown[]
+    message[0] = time
+    message[1] = this.state.seq
 
     // Debug: log SEND message received
-    console.log(`[${this.sessionId}] SEND: time=${time}, seq=${this.state.seq}, payload=${JSON.stringify(args).slice(0, 100)}`)
+    console.log(`[${this.sessionId}] SEND: time=${time}, seq=${this.state.seq}, payload=${JSON.stringify(message[2]).slice(0, 100)}`)
 
     // Broadcast RECV to all clients (official format)
     const recvMsg = {

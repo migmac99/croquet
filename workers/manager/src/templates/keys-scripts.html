@@ -1,6 +1,41 @@
 <script>
   let newKey = ''
 
+  function filterByAccount(accountId) {
+    // Filter elements by data-account-id attribute
+    document.querySelectorAll('[data-account-id]').forEach((el) => {
+      let match
+      if (!accountId) {
+        match = true // Show all
+      } else if (accountId === '__none__') {
+        match = el.dataset.accountId === '' // Show only those without account
+      } else {
+        match = el.dataset.accountId === accountId
+      }
+      el.style.display = match ? '' : 'none'
+    })
+
+    // Update empty state visibility
+    const mobileContainer = document.querySelector('.lg\\:hidden.space-y-5')
+    const tableBody = document.querySelector('tbody')
+
+    if (mobileContainer) {
+      const visibleCards = mobileContainer.querySelectorAll('[data-account-id]:not([style*="display: none"])')
+      const emptyCard = mobileContainer.querySelector('.text-center')
+      if (emptyCard && !emptyCard.dataset.accountId) {
+        emptyCard.style.display = visibleCards.length === 0 ? '' : 'none'
+      }
+    }
+
+    if (tableBody) {
+      const visibleRows = tableBody.querySelectorAll('tr[data-account-id]:not([style*="display: none"])')
+      const emptyRow = tableBody.querySelector('tr:not([data-account-id])')
+      if (emptyRow) {
+        emptyRow.style.display = visibleRows.length === 0 ? '' : 'none'
+      }
+    }
+  }
+
   document.getElementById('createForm').addEventListener('submit', async (e) => {
     e.preventDefault()
     const form = e.target
@@ -12,6 +47,7 @@
         .filter(Boolean),
       tier: form.tier.value,
       version: parseInt(form.version.value, 10),
+      accountId: form.accountId.value || undefined,
     }
 
     try {
@@ -81,4 +117,57 @@
       alert('Error: ' + err.message)
     }
   }
+
+  async function editKey(id) {
+    try {
+      const res = await fetch('/keys/' + id)
+      if (!res.ok) throw new Error(await res.text())
+
+      const key = await res.json()
+
+      // Populate form fields
+      document.getElementById('editKeyId').value = key.id
+      document.getElementById('editKeyName').value = key.name
+      document.getElementById('editKeyDomains').value = key.allowedDomains.join(', ')
+      document.getElementById('editKeyTier').value = key.tier
+      document.getElementById('editKeyActive').value = key.active ? 'true' : 'false'
+      document.getElementById('editKeyAccount').value = key.accountId || ''
+
+      document.getElementById('editDialog').showModal()
+    } catch (err) {
+      alert('Error loading key: ' + err.message)
+    }
+  }
+
+  document.getElementById('editForm').addEventListener('submit', async (e) => {
+    e.preventDefault()
+    const form = e.target
+    const id = form.id.value
+
+    const data = {
+      name: form.name.value,
+      allowedDomains: form.domains.value
+        .split(',')
+        .map((d) => d.trim())
+        .filter(Boolean),
+      tier: form.tier.value,
+      active: form.active.value === 'true',
+      accountId: form.accountId.value || null,
+    }
+
+    try {
+      const res = await fetch('/keys/' + id, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      })
+
+      if (!res.ok) throw new Error(await res.text())
+
+      document.getElementById('editDialog').close()
+      location.reload()
+    } catch (err) {
+      alert('Error updating key: ' + err.message)
+    }
+  })
 </script>
