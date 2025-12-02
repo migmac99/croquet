@@ -178,6 +178,53 @@
         color: hsl(0 0% 98%);
         box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1);
       }
+      /* Toast notifications */
+      .toast-container {
+        position: fixed;
+        bottom: 1.5rem;
+        right: 1.5rem;
+        z-index: 100;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+      .toast {
+        background-color: hsl(240 3.7% 15.9%);
+        border: 1px solid hsl(240 3.7% 20%);
+        color: hsl(0 0% 98%);
+        padding: 0.75rem 1rem;
+        border-radius: 0.5rem;
+        font-size: 0.875rem;
+        box-shadow: 0 4px 12px rgb(0 0 0 / 0.3);
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        animation: toast-in 0.2s ease-out;
+        max-width: 300px;
+      }
+      .toast.toast-out {
+        animation: toast-out 0.2s ease-in forwards;
+      }
+      @keyframes toast-in {
+        from {
+          opacity: 0;
+          transform: translateY(1rem);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      @keyframes toast-out {
+        from {
+          opacity: 1;
+          transform: translateY(0);
+        }
+        to {
+          opacity: 0;
+          transform: translateY(-0.5rem);
+        }
+      }
     </style>
   </head>
   <body class="bg-background text-foreground min-h-screen">
@@ -281,6 +328,9 @@
       </main>
     </div>
 
+    <!-- Toast container -->
+    <div id="toastContainer" class="toast-container"></div>
+
     <script>
       function toggleSidebar() {
         const sidebar = document.getElementById('sidebar')
@@ -297,6 +347,32 @@
         sidebar.classList.remove('translate-x-0')
         overlay.classList.add('opacity-0')
         overlay.classList.add('invisible')
+      }
+      function showToast(message) {
+        const container = document.getElementById('toastContainer')
+        const toast = document.createElement('div')
+        toast.className = 'toast'
+        toast.innerHTML = `
+          <svg class="w-4 h-4 text-green-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+          </svg>
+          <span>${message}</span>
+        `
+        container.appendChild(toast)
+        setTimeout(() => {
+          toast.classList.add('toast-out')
+          setTimeout(() => toast.remove(), 200)
+        }, 2000)
+      }
+      function copyToClipboard(text, label) {
+        navigator.clipboard
+          .writeText(text)
+          .then(() => {
+            showToast(`${label || 'Value'} copied`)
+          })
+          .catch(() => {
+            showToast('Failed to copy')
+          })
       }
     </script>
     {{scripts}}

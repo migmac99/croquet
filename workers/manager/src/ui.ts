@@ -115,22 +115,27 @@ export function renderKeysPage(
     <div class="card p-6 space-y-4" data-account-id="${key.accountId || ''}">
       <div class="flex items-start justify-between">
         <div class="min-w-0 flex-1">
-          <div class="font-medium truncate">${escapeHtml(key.name)}</div>
-          <div class="text-xs text-muted-foreground font-mono truncate mt-1.5">${key.id}</div>
+          <div class="font-medium truncate cursor-pointer hover:text-muted-foreground transition-colors" onclick="copyToClipboard('${escapeHtml(key.name)}', 'Name')" title="Click to copy">${escapeHtml(key.name)}</div>
+          <div class="text-xs text-muted-foreground font-mono truncate mt-1.5 cursor-pointer hover:text-foreground transition-colors" onclick="copyToClipboard('${key.id}', 'Key ID')" title="Click to copy">${key.id}</div>
         </div>
-        <span class="badge ${key.active ? 'badge-success' : 'badge-destructive'} ml-3 shrink-0">${key.active ? 'Active' : 'Inactive'}</span>
+        <div class="flex gap-1.5 ml-3 shrink-0">
+          <span class="badge ${key.active ? 'badge-success' : 'badge-destructive'}">${key.active ? 'Active' : 'Inactive'}</span>
+          <span class="badge ${tierBadgeClass(key.tier)}">${key.tier}</span>
+        </div>
       </div>
-      ${key.accountId ? `<div class="text-xs text-muted-foreground">Account: <span class="font-medium">${escapeHtml(accountMap.get(key.accountId) || key.accountId)}</span></div>` : ''}
+      ${key.accountId ? `<div class="text-xs text-muted-foreground cursor-pointer hover:text-foreground transition-colors" onclick="copyToClipboard('${key.accountId}', 'Account ID')" title="Click to copy">Account: <span class="font-medium">${escapeHtml(accountMap.get(key.accountId) || key.accountId)}</span></div>` : ''}
       <div class="flex flex-wrap gap-2">
         ${key.allowedDomains
           .slice(0, 2)
-          .map((d) => `<span class="badge text-xs">${escapeHtml(d)}</span>`)
+          .map(
+            (d) =>
+              `<span class="badge text-xs cursor-pointer hover:opacity-80" onclick="copyToClipboard('${escapeHtml(d)}', 'Domain')" title="Click to copy">${escapeHtml(d)}</span>`
+          )
           .join('')}
-        ${key.allowedDomains.length > 2 ? `<span class="badge text-xs">+${key.allowedDomains.length - 2}</span>` : ''}
+        ${key.allowedDomains.length > 2 ? `<span class="badge text-xs cursor-pointer hover:opacity-80" onclick="copyToClipboard('${key.allowedDomains.join(', ')}', 'All domains')" title="Click to copy all">+${key.allowedDomains.length - 2}</span>` : ''}
       </div>
       <div class="flex items-center justify-between text-xs text-muted-foreground">
-        <span class="badge ${tierBadgeClass(key.tier)}">${key.tier}</span>
-        <span>${key.stats?.totalRequests || 0} requests</span>
+        <span class="cursor-pointer hover:text-foreground transition-colors" onclick="copyToClipboard('${key.stats?.totalRequests || 0}', 'Request count')" title="Click to copy">${key.stats?.totalRequests || 0} requests</span>
       </div>
       <div class="flex gap-3 pt-4 border-t border-border">
         <button onclick="editKey('${key.id}')" class="btn btn-ghost btn-sm flex-1">Edit</button>
@@ -151,23 +156,26 @@ export function renderKeysPage(
             (key) => `
     <tr class="border-b border-border hover:bg-secondary/30 transition-colors" data-account-id="${key.accountId || ''}">
       <td class="px-6 py-5">
-        <div class="font-medium">${escapeHtml(key.name)}</div>
-        <div class="text-xs text-muted-foreground font-mono mt-1">${key.id}</div>
+        <div class="font-medium cursor-pointer hover:text-muted-foreground transition-colors" onclick="copyToClipboard('${escapeHtml(key.name)}', 'Name')" title="Click to copy">${escapeHtml(key.name)}</div>
+        <div class="text-xs text-muted-foreground font-mono mt-1 cursor-pointer hover:text-foreground transition-colors" onclick="copyToClipboard('${key.id}', 'Key ID')" title="Click to copy">${key.id}</div>
       </td>
       <td class="px-6 py-5 text-sm">
-        ${key.accountId ? `<span class="font-medium">${escapeHtml(accountMap.get(key.accountId) || key.accountId)}</span>` : '<span class="text-muted-foreground">—</span>'}
+        ${key.accountId ? `<span class="font-medium cursor-pointer hover:text-foreground transition-colors" onclick="copyToClipboard('${key.accountId}', 'Account ID')" title="Click to copy">${escapeHtml(accountMap.get(key.accountId) || key.accountId)}</span>` : '<span class="text-muted-foreground">—</span>'}
       </td>
       <td class="px-6 py-5">
         <div class="flex flex-wrap gap-1.5">
           ${key.allowedDomains
             .slice(0, 3)
-            .map((d) => `<span class="badge">${escapeHtml(d)}</span>`)
+            .map(
+              (d) =>
+                `<span class="badge cursor-pointer hover:opacity-80" onclick="copyToClipboard('${escapeHtml(d)}', 'Domain')" title="Click to copy">${escapeHtml(d)}</span>`
+            )
             .join('')}
           ${key.allowedDomains.length > 3 ? `<span class="badge">+${key.allowedDomains.length - 3}</span>` : ''}
         </div>
       </td>
       <td class="px-6 py-5">
-        <div class="flex flex-col gap-1.5">
+        <div class="flex gap-1.5">
           <span class="badge ${key.active ? 'badge-success' : 'badge-destructive'}">${key.active ? 'Active' : 'Inactive'}</span>
           <span class="badge ${tierBadgeClass(key.tier)}">${key.tier}</span>
         </div>
@@ -179,7 +187,7 @@ export function renderKeysPage(
         ${key.lastUsed ? new Date(key.lastUsed).toLocaleDateString() : 'Never'}
       </td>
       <td class="px-6 py-5">
-        <div class="flex gap-3">
+        <div class="flex gap-2">
           <button onclick="editKey('${key.id}')" class="btn btn-ghost btn-sm">Edit</button>
           <button onclick="rollKey('${key.id}')" class="btn btn-ghost btn-sm">Roll</button>
           <button onclick="deleteKey('${key.id}')" class="btn btn-ghost btn-sm text-red-400 hover:text-red-300">Delete</button>
@@ -241,10 +249,10 @@ export function renderSessionsPage(
             (s) => `
     <div class="card p-6 space-y-4" data-account-id="${s.accountId || ''}">
       <div class="flex items-start justify-between gap-3">
-        <div class="font-mono text-xs truncate flex-1" title="${escapeHtml(s.sessionId)}">${escapeHtml(s.sessionId)}</div>
-        <span class="badge shrink-0">${escapeHtml(s.appId || 'Unknown')}</span>
+        <div class="font-mono text-xs truncate flex-1 cursor-pointer hover:text-muted-foreground transition-colors" onclick="copyToClipboard('${escapeHtml(s.sessionId)}', 'Session ID')" title="Click to copy">${escapeHtml(s.sessionId)}</div>
+        <span class="badge shrink-0 cursor-pointer hover:opacity-80" onclick="copyToClipboard('${escapeHtml(s.appId || 'Unknown')}', 'App ID')" title="Click to copy">${escapeHtml(s.appId || 'Unknown')}</span>
       </div>
-      ${s.accountId ? `<div class="text-xs text-muted-foreground">Account: <span class="font-medium">${escapeHtml(s.accountName || accountMap.get(s.accountId) || s.accountId)}</span></div>` : ''}
+      ${s.accountId ? `<div class="text-xs text-muted-foreground cursor-pointer hover:text-foreground transition-colors" onclick="copyToClipboard('${s.accountId}', 'Account ID')" title="Click to copy">Account: <span class="font-medium">${escapeHtml(s.accountName || accountMap.get(s.accountId) || s.accountId)}</span></div>` : ''}
       <div class="flex items-center justify-between text-sm">
         <span class="text-muted-foreground">Clients</span>
         <span class="font-semibold">${s.clientCount}</span>
@@ -270,13 +278,13 @@ export function renderSessionsPage(
             (s) => `
     <tr class="border-b border-border hover:bg-secondary/30 transition-colors" data-account-id="${s.accountId || ''}">
       <td class="px-6 py-5">
-        <div class="font-mono text-sm truncate max-w-xs" title="${escapeHtml(s.sessionId)}">${escapeHtml(s.sessionId)}</div>
+        <div class="font-mono text-sm truncate max-w-xs cursor-pointer hover:text-muted-foreground transition-colors" onclick="copyToClipboard('${escapeHtml(s.sessionId)}', 'Session ID')" title="Click to copy">${escapeHtml(s.sessionId)}</div>
       </td>
       <td class="px-6 py-5">
-        <span class="badge">${escapeHtml(s.appId || 'Unknown')}</span>
+        <span class="badge cursor-pointer hover:opacity-80" onclick="copyToClipboard('${escapeHtml(s.appId || 'Unknown')}', 'App ID')" title="Click to copy">${escapeHtml(s.appId || 'Unknown')}</span>
       </td>
       <td class="px-6 py-5 text-sm">
-        ${s.accountId ? `<span class="font-medium">${escapeHtml(s.accountName || accountMap.get(s.accountId) || s.accountId)}</span>` : '<span class="text-muted-foreground">—</span>'}
+        ${s.accountId ? `<span class="font-medium cursor-pointer hover:text-foreground transition-colors" onclick="copyToClipboard('${s.accountId}', 'Account ID')" title="Click to copy">${escapeHtml(s.accountName || accountMap.get(s.accountId) || s.accountId)}</span>` : '<span class="text-muted-foreground">—</span>'}
       </td>
       <td class="px-6 py-5">
         <span class="text-lg font-semibold">${s.clientCount}</span>
@@ -341,12 +349,12 @@ export function renderAccountsPage(
     <div class="card p-6 space-y-4">
       <div class="flex items-start justify-between">
         <div class="min-w-0 flex-1">
-          <div class="font-medium truncate">${escapeHtml(account.name)}</div>
-          <div class="text-xs text-muted-foreground font-mono truncate mt-1.5">${account.id}</div>
+          <div class="font-medium truncate cursor-pointer hover:text-muted-foreground transition-colors" onclick="copyToClipboard('${escapeHtml(account.name)}', 'Name')" title="Click to copy">${escapeHtml(account.name)}</div>
+          <div class="text-xs text-muted-foreground font-mono truncate mt-1.5 cursor-pointer hover:text-foreground transition-colors" onclick="copyToClipboard('${account.id}', 'Account ID')" title="Click to copy">${account.id}</div>
         </div>
         <span class="badge ${account.active ? 'badge-success' : 'badge-destructive'} ml-3 shrink-0">${account.active ? 'Active' : 'Inactive'}</span>
       </div>
-      ${account.description ? `<div class="text-sm text-muted-foreground">${escapeHtml(account.description)}</div>` : ''}
+      ${account.description ? `<div class="text-sm text-muted-foreground cursor-pointer hover:text-foreground transition-colors" onclick="copyToClipboard('${escapeHtml(account.description)}', 'Description')" title="Click to copy">${escapeHtml(account.description)}</div>` : ''}
       <div class="flex items-center justify-between text-xs text-muted-foreground">
         <span>Created ${new Date(account.createdAt).toLocaleDateString()}</span>
         <span>${account.lastUsed ? `Used ${formatTimeAgo(account.lastUsed)}` : 'Never used'}</span>
@@ -370,11 +378,11 @@ export function renderAccountsPage(
             (account) => `
     <tr class="border-b border-border hover:bg-secondary/30 transition-colors">
       <td class="px-6 py-5">
-        <div class="font-medium">${escapeHtml(account.name)}</div>
-        ${account.description ? `<div class="text-xs text-muted-foreground mt-1">${escapeHtml(account.description)}</div>` : ''}
+        <div class="font-medium cursor-pointer hover:text-muted-foreground transition-colors" onclick="copyToClipboard('${escapeHtml(account.name)}', 'Name')" title="Click to copy">${escapeHtml(account.name)}</div>
+        ${account.description ? `<div class="text-xs text-muted-foreground mt-1 cursor-pointer hover:text-foreground transition-colors" onclick="copyToClipboard('${escapeHtml(account.description)}', 'Description')" title="Click to copy">${escapeHtml(account.description)}</div>` : ''}
       </td>
       <td class="px-6 py-5">
-        <div class="font-mono text-sm">${account.id}</div>
+        <div class="font-mono text-sm cursor-pointer hover:text-muted-foreground transition-colors" onclick="copyToClipboard('${account.id}', 'Account ID')" title="Click to copy">${account.id}</div>
       </td>
       <td class="px-6 py-5">
         <span class="badge ${account.active ? 'badge-success' : 'badge-destructive'}">${account.active ? 'Active' : 'Inactive'}</span>

@@ -56,6 +56,11 @@ interface IncomingMessage {
 
 /**
  * Attachment stored with each WebSocket (survives hibernation)
+ *
+ * State machine (matching original reflector):
+ * - joined: Client has sent JOIN message (connected to session)
+ * - active: Client has received SYNC and is actively participating
+ *           Only active clients are counted in USERS messages
  */
 interface WSAttachment {
   clientId: string
@@ -64,6 +69,7 @@ interface WSAttachment {
   joinedAt: number
   lastSeen: number
   joined: boolean
+  active: boolean // Set true AFTER SYNC sent (like original reflector's client.active)
 }
 
 /**
@@ -174,6 +180,7 @@ export class Synchronizer extends DurableObject<Env> {
       joinedAt: Date.now(),
       lastSeen: Date.now(),
       joined: false,
+      active: false, // Will be set true AFTER SYNC is sent
     }
 
     // Accept WebSocket with hibernation support
@@ -222,8 +229,9 @@ export class Synchronizer extends DurableObject<Env> {
 
     console.log(`[${this.sessionId}] Client disconnected: ${clientId} (${code}: ${reason})`)
 
-    // Queue users left event if client had joined (batched like original reflector)
-    if (attachment?.joined && userId) {
+    // Queue users left event only if client was ACTIVE (had received SYNC)
+    // Original reflector: announceUserLeft checks client.active !== true and returns early
+    if (attachment?.active && userId) {
       this.queueUserLeave(userId)
     }
 
@@ -431,6 +439,12 @@ export class Synchronizer extends DurableObject<Env> {
 
     ws.send(JSON.stringify(syncResponse))
 
+    // Mark client as active AFTER SYNC is sent (matches original reflector)
+    // In original: announceUserJoined() sets client.active = true after SYNC
+    // This is critical for correct view count in USERS messages
+    attachment.active = true
+    ws.serializeAttachment(attachment)
+
     // Queue user join for batched users event (matches original reflector)
     // The original reflector batches joins/leaves and sends them together
     if (attachment.userId) {
@@ -452,15 +466,20 @@ export class Synchronizer extends DurableObject<Env> {
   /**
    * Send users event to all clients (matches original reflector USERS function)
    * This is broadcast to ALL clients and buffered for late-joiners
+   *
+   * CRITICAL: Count only clients where active === true (not just joined)
+   * Original reflector: [...clients].filter(each => each.active)
+   * A client in the set but not active is between JOIN and SYNC
    */
   private sendUsersEvent(joined: (string | undefined)[], left: (string | undefined)[]): void {
     if (!this.state) return
     if (joined.length === 0 && left.length === 0) return
 
     const sockets = this.ctx.getWebSockets()
+    // Count only ACTIVE clients (have received SYNC) - matches original reflector
     const activeClients = sockets.filter((s) => {
       const att = s.deserializeAttachment() as WSAttachment
-      return att?.joined
+      return att?.active === true // Only count clients that have received SYNC
     })
     const active = activeClients.length
     const total = sockets.length
