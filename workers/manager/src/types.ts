@@ -10,6 +10,7 @@ export interface Env {
   // Config
   SYNCHRONIZER_URL: string
   CLUSTER_LABEL: string
+  REGISTRY_URL?: string // URL to registry worker (for synchronizers endpoint)
 }
 
 /**

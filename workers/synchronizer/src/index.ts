@@ -171,6 +171,8 @@ async function handleClientsJoin(request: Request, env: Env): Promise<Response> 
       active: boolean
       allowedDomains: string[]
       metadata?: { createdBy?: string }
+      lastUsed?: number
+      stats?: { totalRequests?: number; totalSessions?: number }
     }>(`key:${apiKey}`, 'json')
     if (!record) return errorResponse('Invalid API key', 403)
     if (!record.active) return errorResponse('API key is deactivated', 403)
@@ -178,6 +180,17 @@ async function handleClientsJoin(request: Request, env: Env): Promise<Response> 
     // Check domain whitelist
     const originCheck = isOriginAllowed(getOrigin(request), record.allowedDomains)
     if (!originCheck.allowed) return errorResponse(originCheck.error!, 403)
+
+    // Update usage stats (fire and forget) - matches registry behavior
+    const updated = {
+      ...record,
+      lastUsed: Date.now(),
+      stats: {
+        totalRequests: (record.stats?.totalRequests || 0) + 1,
+        totalSessions: record.stats?.totalSessions || 0,
+      },
+    }
+    env.APIKEYS.put(`key:${apiKey}`, JSON.stringify(updated))
 
     const developerId = record.metadata?.createdBy || record.id
     console.log(`[sync] API key verified for ${developerId}`)

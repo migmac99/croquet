@@ -45,6 +45,9 @@ export default {
         case '/sessions':
           return handleListSessions(request, env)
 
+        case '/synchronizers':
+          return handleListSynchronizers(request, env)
+
         case '/clients/join':
           return handleClientsJoin(request, env)
 
@@ -238,6 +241,171 @@ async function handleListSessions(request: Request, env: Env): Promise<Response>
     },
     { headers: corsHeaders() }
   )
+}
+
+/**
+ * Synchronizer info aggregated from sessions
+ */
+interface SynchronizerInfo {
+  url: string
+  label: string
+  sessionCount: number
+  clientCount: number
+  lastSeen: number
+  region?: string
+  lat?: number
+  lon?: number
+}
+
+/**
+ * Handle /synchronizers - List all active synchronizers with session/client counts
+ * Supports ?out=map for GeoJSON format (for map visualization)
+ */
+async function handleListSynchronizers(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url)
+  const outputFormat = url.searchParams.get('out')
+
+  // Aggregate sessions by synchronizer URL
+  const synchronizers = new Map<string, SynchronizerInfo>()
+
+  let cursor: string | undefined
+  do {
+    const list = await env.SESSIONS.list({ cursor, limit: 1000 })
+
+    for (const key of list.keys) {
+      const session = await env.SESSIONS.get<SessionRecord>(key.name, 'json')
+      if (!session) continue
+
+      const syncUrl = session.synchronizerUrl || env.SYNCHRONIZER_URL
+      const existing = synchronizers.get(syncUrl)
+
+      if (existing) {
+        existing.sessionCount++
+        existing.clientCount += session.clientCount || 0
+        existing.lastSeen = Math.max(existing.lastSeen, session.lastSeen)
+      } else {
+        // Try to extract region/location from URL or label
+        const info = parseSynchronizerUrl(syncUrl, env.CLUSTER_LABEL)
+        synchronizers.set(syncUrl, {
+          url: syncUrl,
+          label: info.label,
+          sessionCount: 1,
+          clientCount: session.clientCount || 0,
+          lastSeen: session.lastSeen,
+          region: info.region,
+          lat: info.lat,
+          lon: info.lon,
+        })
+      }
+    }
+
+    cursor = list.list_complete ? undefined : list.cursor
+  } while (cursor)
+
+  const syncList = Array.from(synchronizers.values()).sort((a, b) => b.sessionCount - a.sessionCount)
+
+  // GeoJSON output for map visualization
+  if (outputFormat === 'map') {
+    const features = syncList
+      .filter((s) => s.lat !== undefined && s.lon !== undefined)
+      .map((s) => ({
+        type: 'Feature' as const,
+        geometry: {
+          type: 'Point' as const,
+          coordinates: [s.lon!, s.lat!],
+        },
+        properties: {
+          url: s.url,
+          label: s.label,
+          region: s.region,
+          sessionCount: s.sessionCount,
+          clientCount: s.clientCount,
+          lastSeen: s.lastSeen,
+        },
+      }))
+
+    return Response.json(
+      {
+        type: 'FeatureCollection',
+        features,
+        totals: {
+          synchronizers: syncList.length,
+          sessions: syncList.reduce((sum, s) => sum + s.sessionCount, 0),
+          clients: syncList.reduce((sum, s) => sum + s.clientCount, 0),
+        },
+      },
+      { headers: corsHeaders() }
+    )
+  }
+
+  // Default: JSON list
+  return Response.json(
+    {
+      count: syncList.length,
+      synchronizers: syncList,
+      totals: {
+        sessions: syncList.reduce((sum, s) => sum + s.sessionCount, 0),
+        clients: syncList.reduce((sum, s) => sum + s.clientCount, 0),
+      },
+    },
+    { headers: corsHeaders() }
+  )
+}
+
+/**
+ * Parse synchronizer URL to extract region and approximate location
+ * This uses known Cloudflare region codes or custom labels
+ */
+function parseSynchronizerUrl(url: string, defaultLabel: string): { label: string; region?: string; lat?: number; lon?: number } {
+  // Known Cloudflare/region locations (approximate datacenter locations)
+  const regionLocations: Record<string, { lat: number; lon: number; name: string }> = {
+    // North America
+    'us-west': { lat: 37.7749, lon: -122.4194, name: 'US West (San Francisco)' },
+    'us-east': { lat: 39.0438, lon: -77.4874, name: 'US East (Virginia)' },
+    'us-central': { lat: 41.8781, lon: -87.6298, name: 'US Central (Chicago)' },
+    // Europe
+    'eu-west': { lat: 53.3498, lon: -6.2603, name: 'EU West (Dublin)' },
+    'eu-central': { lat: 50.1109, lon: 8.6821, name: 'EU Central (Frankfurt)' },
+    'eu-north': { lat: 59.3293, lon: 18.0686, name: 'EU North (Stockholm)' },
+    // Asia Pacific
+    'ap-east': { lat: 35.6762, lon: 139.6503, name: 'AP East (Tokyo)' },
+    'ap-southeast': { lat: 1.3521, lon: 103.8198, name: 'AP Southeast (Singapore)' },
+    'ap-south': { lat: 19.076, lon: 72.8777, name: 'AP South (Mumbai)' },
+    // South America
+    'sa-east': { lat: -23.5505, lon: -46.6333, name: 'SA East (São Paulo)' },
+    // Australia
+    'au-east': { lat: -33.8688, lon: 151.2093, name: 'AU East (Sydney)' },
+    // Fallback for local/dev
+    local: { lat: 37.7749, lon: -122.4194, name: 'Local Development' },
+    'local-dev': { lat: 37.7749, lon: -122.4194, name: 'Local Development' },
+  }
+
+  // Try to extract region from URL or use default label
+  const urlLower = url.toLowerCase()
+  let region: string | undefined
+  let location: { lat: number; lon: number; name: string } | undefined
+
+  // Check for region patterns in URL
+  for (const [key, loc] of Object.entries(regionLocations)) {
+    if (urlLower.includes(key) || defaultLabel.toLowerCase().includes(key)) {
+      region = key
+      location = loc
+      break
+    }
+  }
+
+  // If no region found, use default with local location
+  if (!location && (urlLower.includes('localhost') || urlLower.includes('127.0.0.1'))) {
+    region = 'local'
+    location = regionLocations.local
+  }
+
+  return {
+    label: location?.name || defaultLabel || url,
+    region,
+    lat: location?.lat,
+    lon: location?.lon,
+  }
 }
 
 async function handleHealth(env: Env): Promise<Response> {

@@ -14,6 +14,8 @@ import sessionsTemplate from './templates/sessions.html'
 import sessionsScripts from './templates/sessions-scripts.html'
 import accountsTemplate from './templates/accounts.html'
 import accountsScripts from './templates/accounts-scripts.html'
+import synchronizersTemplate from './templates/synchronizers.html'
+import mapTemplate from './templates/map.html'
 
 /**
  * Simple template engine - replaces {{key}} with values
@@ -32,7 +34,7 @@ function renderPage(options: {
   title: string
   content: string
   scripts?: string
-  activePage: 'dashboard' | 'keys' | 'sessions' | 'accounts'
+  activePage: 'dashboard' | 'keys' | 'sessions' | 'accounts' | 'synchronizers' | 'map'
   user: string
   cluster: string
 }): string {
@@ -50,6 +52,8 @@ function renderPage(options: {
     nav_keys_active: options.activePage === 'keys' ? navActive : navInactive,
     nav_sessions_active: options.activePage === 'sessions' ? navActive : navInactive,
     nav_accounts_active: options.activePage === 'accounts' ? navActive : navInactive,
+    nav_synchronizers_active: options.activePage === 'synchronizers' ? navActive : navInactive,
+    nav_map_active: options.activePage === 'map' ? navActive : navInactive,
   })
 }
 
@@ -416,6 +420,138 @@ export function renderAccountsPage(
     content,
     scripts: accountsScripts,
     activePage: 'accounts',
+    user,
+    cluster,
+  })
+}
+
+// ============================================================================
+// Synchronizers Page
+// ============================================================================
+
+export function renderSynchronizersPage(
+  synchronizers: Array<{
+    url: string
+    label: string
+    sessionCount: number
+    clientCount: number
+    lastSeen: number
+    region?: string
+  }>,
+  user: string,
+  cluster: string
+): string {
+  // Calculate totals
+  const totalSynchronizers = synchronizers.length
+  const totalSessions = synchronizers.reduce((sum, s) => sum + s.sessionCount, 0)
+  const totalClients = synchronizers.reduce((sum, s) => sum + s.clientCount, 0)
+
+  // Generate mobile cards
+  const synchronizerCards =
+    synchronizers.length > 0
+      ? synchronizers
+          .map(
+            (sync) => `
+    <div class="card p-6 space-y-4">
+      <div class="flex items-start justify-between">
+        <div class="min-w-0 flex-1">
+          <div class="font-medium truncate">${escapeHtml(sync.label)}</div>
+          <div class="text-xs text-muted-foreground font-mono truncate mt-1.5 cursor-pointer hover:text-foreground transition-colors" onclick="copyToClipboard('${escapeHtml(sync.url)}', 'URL')" title="Click to copy">${escapeHtml(sync.url)}</div>
+        </div>
+        <span class="badge badge-success ml-3 shrink-0">Active</span>
+      </div>
+      <div class="flex items-center justify-between text-sm">
+        <span class="text-muted-foreground">Region</span>
+        <span class="font-medium">${sync.region || 'Unknown'}</span>
+      </div>
+      <div class="flex items-center justify-between text-sm">
+        <span class="text-muted-foreground">Sessions</span>
+        <span class="font-semibold">${sync.sessionCount}</span>
+      </div>
+      <div class="flex items-center justify-between text-sm">
+        <span class="text-muted-foreground">Clients</span>
+        <span class="font-semibold">${sync.clientCount}</span>
+      </div>
+      <div class="flex items-center justify-between text-xs text-muted-foreground">
+        <span>Last activity</span>
+        <span>${formatTimeAgo(sync.lastSeen)}</span>
+      </div>
+    </div>
+  `
+          )
+          .join('')
+      : '<div class="card p-10 text-center text-muted-foreground">No active synchronizers</div>'
+
+  // Generate table rows
+  const synchronizerRows =
+    synchronizers.length > 0
+      ? synchronizers
+          .map(
+            (sync) => `
+    <tr class="border-b border-border hover:bg-secondary/30 transition-colors">
+      <td class="px-6 py-5">
+        <div class="font-medium">${escapeHtml(sync.label)}</div>
+        <div class="text-xs text-muted-foreground font-mono mt-1 cursor-pointer hover:text-foreground transition-colors" onclick="copyToClipboard('${escapeHtml(sync.url)}', 'URL')" title="Click to copy">${escapeHtml(sync.url)}</div>
+      </td>
+      <td class="px-6 py-5">
+        <span class="badge">${sync.region || 'Unknown'}</span>
+      </td>
+      <td class="px-6 py-5">
+        <span class="text-lg font-semibold">${sync.sessionCount}</span>
+      </td>
+      <td class="px-6 py-5">
+        <span class="text-lg font-semibold">${sync.clientCount}</span>
+      </td>
+      <td class="px-6 py-5 text-sm text-muted-foreground">
+        ${formatTimeAgo(sync.lastSeen)}
+      </td>
+      <td class="px-6 py-5">
+        <span class="badge badge-success">Active</span>
+      </td>
+    </tr>
+  `
+          )
+          .join('')
+      : '<tr><td colspan="6" class="p-10 text-center text-muted-foreground">No active synchronizers</td></tr>'
+
+  const content = render(synchronizersTemplate, {
+    total_synchronizers: totalSynchronizers,
+    total_sessions: totalSessions,
+    total_clients: totalClients,
+    synchronizer_cards: synchronizerCards,
+    synchronizer_rows: synchronizerRows,
+  })
+
+  return renderPage({
+    title: 'Synchronizers',
+    content,
+    activePage: 'synchronizers',
+    user,
+    cluster,
+  })
+}
+
+// ============================================================================
+// Map Page
+// ============================================================================
+
+export function renderMapPage(
+  geoJsonData: object,
+  totals: { synchronizers: number; sessions: number; clients: number },
+  user: string,
+  cluster: string
+): string {
+  const content = render(mapTemplate, {
+    total_synchronizers: totals.synchronizers,
+    total_sessions: totals.sessions,
+    total_clients: totals.clients,
+    geojson_data: JSON.stringify(geoJsonData),
+  })
+
+  return renderPage({
+    title: 'World Map',
+    content,
+    activePage: 'map',
     user,
     cluster,
   })

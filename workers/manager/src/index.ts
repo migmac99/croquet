@@ -18,7 +18,7 @@ import type {
   CreateAccountRequest,
   UpdateAccountRequest,
 } from './types'
-import { renderDashboard, renderKeysPage, renderSessionsPage, renderAccountsPage } from './ui'
+import { renderDashboard, renderKeysPage, renderSessionsPage, renderAccountsPage, renderSynchronizersPage, renderMapPage } from './ui'
 
 /**
  * Verify Bearer token auth against stored account secrets
@@ -219,8 +219,7 @@ export default {
     const isLocalhost = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
     let user: AuthenticatedUser | null = null
 
-    if (isLocalhost)
-      user = { email: 'dev@localhost', sub: 'dev' } // Dev mode - use mock user
+    if (isLocalhost) user = { email: 'dev@localhost', sub: 'dev' }
     else {
       // Production - verify Cloudflare Access JWT
       user = await verifyAccessJWT(request, env)
@@ -237,6 +236,8 @@ export default {
       if (path === '/ui/keys') return await getKeysUI(env, user) // Keys UI
       if (path === '/ui/sessions') return await getSessionsUI(env, user) // Sessions UI
       if (path === '/ui/accounts') return await getAccountsUI(env, user) // Accounts UI
+      if (path === '/ui/synchronizers') return await getSynchronizersUI(env, user) // Synchronizers UI
+      if (path === '/ui/map') return await getMapUI(env, user) // Map UI
 
       // ========================================
       // API Routes (JSON)
@@ -634,14 +635,10 @@ async function depinCreateKey(url: URL, env: Env, account: AccountRecord, user: 
 
   // Build allowed domains list
   const allowedDomains = [...urls]
-  if (dev) {
-    allowedDomains.push('localhost:*')
-  }
+  if (dev) allowedDomains.push('localhost:*')
 
   // Ensure at least one domain
-  if (allowedDomains.length === 0) {
-    allowedDomains.push('*') // Allow all if no urls specified
-  }
+  if (allowedDomains.length === 0) allowedDomains.push('*') // Allow all if no urls specified
 
   // Generate key (v3 for Cloudflare Workers)
   const id = generateKeyId()
@@ -721,9 +718,7 @@ async function depinUpdateKey(keyValue: string, url: URL, env: Env, account: Acc
   if (!record) return text('Error: Key not found', 404)
 
   // Verify key belongs to this account
-  if (record.accountId !== account.id) {
-    return text('Error: Key not found', 404) // Don't reveal it exists but belongs to another account
-  }
+  if (record.accountId !== account.id) return text('Error: Key not found', 404) // Don't reveal it exists but belongs to another account
 
   const urlsParam = url.searchParams.get('urls')
   const urls = parseDepinUrls(urlsParam)
@@ -732,14 +727,10 @@ async function depinUpdateKey(keyValue: string, url: URL, env: Env, account: Acc
 
   // Build new allowed domains list
   const allowedDomains = [...urls]
-  if (dev) {
-    allowedDomains.push('localhost:*')
-  }
+  if (dev) allowedDomains.push('localhost:*')
 
   // Ensure at least one domain
-  if (allowedDomains.length === 0) {
-    allowedDomains.push('*')
-  }
+  if (allowedDomains.length === 0) allowedDomains.push('*')
 
   // Update record
   const updated: ApiKeyRecord = {
@@ -772,9 +763,7 @@ async function depinDeleteKey(keyValue: string, env: Env, account: AccountRecord
   if (!record) return text('Error: Key not found', 404)
 
   // Verify key belongs to this account
-  if (record.accountId !== account.id) {
-    return text('Error: Key not found', 404) // Don't reveal it exists but belongs to another account
-  }
+  if (record.accountId !== account.id) return text('Error: Key not found', 404) // Don't reveal it exists but belongs to another account
 
   // Delete both records
   await env.APIKEYS.delete(`key:${keyValue}`)
@@ -1066,9 +1055,7 @@ async function getKeysUI(env: Env, user: AuthenticatedUser): Promise<Response> {
     const accountResult = await env.ACCOUNTS.list({ prefix: 'id:', cursor: accountCursor })
     for (const key of accountResult.keys) {
       const record = await env.ACCOUNTS.get<AccountRecord>(key.name, 'json')
-      if (record && record.active) {
-        accounts.push({ id: record.id, name: record.name })
-      }
+      if (record && record.active) accounts.push({ id: record.id, name: record.name })
     }
     accountCursor = accountResult.list_complete ? undefined : accountResult.cursor
   } while (accountCursor)
@@ -1104,9 +1091,7 @@ async function getSessionsUI(env: Env, user: AuthenticatedUser): Promise<Respons
     const result = await env.APIKEYS.list({ prefix: 'id:', cursor: keyCursor })
     for (const key of result.keys) {
       const record = await env.APIKEYS.get<ApiKeyRecord>(key.name, 'json')
-      if (record && record.accountId) {
-        apiKeyAccountMap.set(record.id, { accountId: record.accountId })
-      }
+      if (record && record.accountId) apiKeyAccountMap.set(record.id, { accountId: record.accountId })
     }
     keyCursor = result.list_complete ? undefined : result.cursor
   } while (keyCursor)
@@ -1120,9 +1105,7 @@ async function getSessionsUI(env: Env, user: AuthenticatedUser): Promise<Respons
     for (const key of result.keys) {
       const record = await env.ACCOUNTS.get<AccountRecord>(key.name, 'json')
       if (record) {
-        if (record.active) {
-          accounts.push({ id: record.id, name: record.name })
-        }
+        if (record.active) accounts.push({ id: record.id, name: record.name })
         accountNameMap.set(record.id, record.name)
       }
     }
@@ -1162,4 +1145,145 @@ async function getAccountsUI(env: Env, user: AuthenticatedUser): Promise<Respons
   accounts.sort((a, b) => b.createdAt - a.createdAt)
 
   return html(renderAccountsPage(accounts, user.email, env.CLUSTER_LABEL))
+}
+
+async function getSynchronizersUI(env: Env, user: AuthenticatedUser): Promise<Response> {
+  // Aggregate sessions by synchronizer URL directly from SESSIONS KV
+  // (Manager and Registry share the same KV namespace)
+  const synchronizers = new Map<
+    string,
+    {
+      url: string
+      label: string
+      sessionCount: number
+      clientCount: number
+      lastSeen: number
+      region?: string
+    }
+  >()
+
+  let cursor: string | undefined
+  do {
+    const list = await env.SESSIONS.list({ cursor, limit: 1000 })
+
+    for (const key of list.keys) {
+      const session = await env.SESSIONS.get<SessionRecord>(key.name, 'json')
+      if (!session) continue
+
+      const syncUrl = session.synchronizerUrl || env.SYNCHRONIZER_URL
+      const existing = synchronizers.get(syncUrl)
+
+      if (existing) {
+        existing.sessionCount++
+        existing.clientCount += session.clientCount || 0
+        existing.lastSeen = Math.max(existing.lastSeen, session.lastSeen)
+      } else {
+        // Extract label from URL (e.g., "synq.alma.dev" from "wss://synq.alma.dev")
+        const label = syncUrl.replace(/^wss?:\/\//, '').replace(/\/$/, '')
+        synchronizers.set(syncUrl, {
+          url: syncUrl,
+          label,
+          sessionCount: 1,
+          clientCount: session.clientCount || 0,
+          lastSeen: session.lastSeen,
+          region: env.CLUSTER_LABEL,
+        })
+      }
+    }
+
+    cursor = list.list_complete ? undefined : list.cursor
+  } while (cursor)
+
+  const syncList = Array.from(synchronizers.values()).sort((a, b) => b.sessionCount - a.sessionCount)
+  return html(renderSynchronizersPage(syncList, user.email, env.CLUSTER_LABEL))
+}
+
+// Known synchronizer locations for map visualization
+const SYNCHRONIZER_LOCATIONS: Record<string, { region: string; lat: number; lon: number }> = {
+  'synq.alma.dev': { region: 'US-West', lat: 37.7749, lon: -122.4194 },
+  'wss://synq.alma.dev': { region: 'US-West', lat: 37.7749, lon: -122.4194 },
+  'alma-prod': { region: 'US-West', lat: 37.7749, lon: -122.4194 },
+  'local-dev': { region: 'Local', lat: 40.7128, lon: -74.006 },
+}
+
+async function getMapUI(env: Env, user: AuthenticatedUser): Promise<Response> {
+  // Aggregate sessions by synchronizer URL directly from SESSIONS KV
+  const synchronizers = new Map<
+    string,
+    {
+      url: string
+      label: string
+      sessionCount: number
+      clientCount: number
+      lastSeen: number
+      region?: string
+      lat?: number
+      lon?: number
+    }
+  >()
+
+  let cursor: string | undefined
+  do {
+    const list = await env.SESSIONS.list({ cursor, limit: 1000 })
+
+    for (const key of list.keys) {
+      const session = await env.SESSIONS.get<SessionRecord>(key.name, 'json')
+      if (!session) continue
+
+      const syncUrl = session.synchronizerUrl || env.SYNCHRONIZER_URL
+      const existing = synchronizers.get(syncUrl)
+
+      if (existing) {
+        existing.sessionCount++
+        existing.clientCount += session.clientCount || 0
+        existing.lastSeen = Math.max(existing.lastSeen, session.lastSeen)
+      } else {
+        const label = syncUrl.replace(/^wss?:\/\//, '').replace(/\/$/, '')
+        // Look up known location
+        const location = SYNCHRONIZER_LOCATIONS[syncUrl] || SYNCHRONIZER_LOCATIONS[label] || SYNCHRONIZER_LOCATIONS[env.CLUSTER_LABEL]
+        synchronizers.set(syncUrl, {
+          url: syncUrl,
+          label,
+          sessionCount: 1,
+          clientCount: session.clientCount || 0,
+          lastSeen: session.lastSeen,
+          region: location?.region || env.CLUSTER_LABEL,
+          lat: location?.lat,
+          lon: location?.lon,
+        })
+      }
+    }
+
+    cursor = list.list_complete ? undefined : list.cursor
+  } while (cursor)
+
+  const syncList = Array.from(synchronizers.values())
+
+  // Build GeoJSON (only include synchronizers with known coordinates)
+  const features = syncList
+    .filter((s) => s.lat !== undefined && s.lon !== undefined)
+    .map((s) => ({
+      type: 'Feature' as const,
+      geometry: {
+        type: 'Point' as const,
+        coordinates: [s.lon!, s.lat!],
+      },
+      properties: {
+        url: s.url,
+        label: s.label,
+        region: s.region,
+        sessionCount: s.sessionCount,
+        clientCount: s.clientCount,
+        lastSeen: s.lastSeen,
+      },
+    }))
+
+  const geoJsonData = { type: 'FeatureCollection', features }
+  const totals = {
+    synchronizers: syncList.length,
+    sessions: syncList.reduce((sum, s) => sum + s.sessionCount, 0),
+    clients: syncList.reduce((sum, s) => sum + s.clientCount, 0),
+  }
+
+  return html(renderMapPage(geoJsonData, totals, user.email, env.CLUSTER_LABEL))
 }

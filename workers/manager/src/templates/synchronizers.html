@@ -1,0 +1,70 @@
+<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-5 mb-10 lg:mb-12">
+  <div>
+    <h2 class="text-2xl sm:text-3xl font-bold">Synchronizers</h2>
+    <p class="text-sm sm:text-base text-muted-foreground mt-2">Active synchronizer instances and their workloads</p>
+  </div>
+  <div class="flex gap-3">
+    <button onclick="location.reload()" class="btn btn-secondary">
+      <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+        />
+      </svg>
+      Refresh
+    </button>
+    <a href="/ui/map" class="btn btn-primary">
+      <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+        />
+      </svg>
+      View Map
+    </a>
+  </div>
+</div>
+
+<!-- Summary cards -->
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-5 mb-10">
+  <div class="card p-6">
+    <div class="text-sm text-muted-foreground mb-1">Total Synchronizers</div>
+    <div class="text-3xl font-bold">{{total_synchronizers}}</div>
+  </div>
+  <div class="card p-6">
+    <div class="text-sm text-muted-foreground mb-1">Total Sessions</div>
+    <div class="text-3xl font-bold">{{total_sessions}}</div>
+  </div>
+  <div class="card p-6">
+    <div class="text-sm text-muted-foreground mb-1">Total Clients</div>
+    <div class="text-3xl font-bold">{{total_clients}}</div>
+  </div>
+</div>
+
+<!-- Mobile card view -->
+<div class="lg:hidden space-y-5">{{synchronizer_cards}}</div>
+
+<!-- Desktop table view -->
+<div class="hidden lg:block card overflow-hidden">
+  <div class="overflow-x-auto">
+    <table class="w-full">
+      <thead class="bg-secondary/50">
+        <tr class="text-left text-sm text-muted-foreground">
+          <th class="px-6 py-4 font-medium">Synchronizer</th>
+          <th class="px-6 py-4 font-medium">Region</th>
+          <th class="px-6 py-4 font-medium">Sessions</th>
+          <th class="px-6 py-4 font-medium">Clients</th>
+          <th class="px-6 py-4 font-medium">Last Activity</th>
+          <th class="px-6 py-4 font-medium">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{synchronizer_rows}}
+      </tbody>
+    </table>
+  </div>
+</div>

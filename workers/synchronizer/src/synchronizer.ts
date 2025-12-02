@@ -93,6 +93,8 @@ export class Synchronizer extends DurableObject<Env> {
   private pendingSnapshot: { clientId: string; time: number } | null = null
   private sessionName: string | null = null // Logical session name (from URL path)
   private usersTimer: ReturnType<typeof setTimeout> | null = null // Timer for batched users events
+  private registeredWithRegistry = false // Track if we've registered with the registry
+  private lastRegistryHeartbeat = 0 // Track last heartbeat to registry
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
@@ -231,13 +233,15 @@ export class Synchronizer extends DurableObject<Env> {
 
     // Queue users left event only if client was ACTIVE (had received SYNC)
     // Original reflector: announceUserLeft checks client.active !== true and returns early
-    if (attachment?.active && userId) {
-      this.queueUserLeave(userId)
-    }
+    if (attachment?.active && userId) this.queueUserLeave(userId)
 
     // Check if session is now empty
     const remaining = this.ctx.getWebSockets().length
     if (remaining === 0) {
+      // Unregister from registry (removes from monitoring UI)
+      // Fire-and-forget - don't block the close handler
+      this.unregisterSession()
+
       const timeoutMs = Number(this.env.SESSION_TIMEOUT_MS) || 300000
       await this.ctx.storage.setAlarm(Date.now() + timeoutMs)
     }
@@ -447,12 +451,14 @@ export class Synchronizer extends DurableObject<Env> {
 
     // Queue user join for batched users event (matches original reflector)
     // The original reflector batches joins/leaves and sends them together
-    if (attachment.userId) {
-      this.queueUserJoin(attachment.userId)
-    }
+    if (attachment.userId) this.queueUserJoin(attachment.userId)
 
     // Ensure ticking
     this.scheduleTick()
+
+    // Register session with registry for monitoring visibility
+    // This is fire-and-forget - don't block the JOIN response
+    if (isEffectivelyFirstClient) this.registerSession(1, args.appId as string | undefined)
 
     // Debug: log session state for troubleshooting
     console.log(
@@ -536,14 +542,8 @@ export class Synchronizer extends DurableObject<Env> {
 
     // If user was in left array, remove from there instead of adding to joined
     const leftIdx = this.state.usersLeft.indexOf(userId)
-    if (leftIdx !== -1) {
-      this.state.usersLeft.splice(leftIdx, 1)
-    } else {
-      // Only add if not already in joined array
-      if (!this.state.usersJoined.includes(userId)) {
-        this.state.usersJoined.push(userId)
-      }
-    }
+    if (leftIdx !== -1) this.state.usersLeft.splice(leftIdx, 1)
+    else if (!this.state.usersJoined.includes(userId)) this.state.usersJoined.push(userId) // Only add if not already in joined array
     this.scheduleUsersEvent()
   }
 
@@ -557,14 +557,8 @@ export class Synchronizer extends DurableObject<Env> {
 
     // If user was in joined array, remove from there instead of adding to left
     const joinedIdx = this.state.usersJoined.indexOf(userId)
-    if (joinedIdx !== -1) {
-      this.state.usersJoined.splice(joinedIdx, 1)
-    } else {
-      // Only add if not already in left array
-      if (!this.state.usersLeft.includes(userId)) {
-        this.state.usersLeft.push(userId)
-      }
-    }
+    if (joinedIdx !== -1) this.state.usersJoined.splice(joinedIdx, 1)
+    else if (!this.state.usersLeft.includes(userId)) this.state.usersLeft.push(userId) // Only add if not already in left array
     this.scheduleUsersEvent()
   }
 
@@ -591,9 +585,7 @@ export class Synchronizer extends DurableObject<Env> {
     this.state.usersLeft = []
 
     // Send the batched users event
-    if (joined.length > 0 || left.length > 0) {
-      this.sendUsersEvent(joined, left)
-    }
+    if (joined.length > 0 || left.length > 0) this.sendUsersEvent(joined, left)
   }
 
   /**
@@ -819,6 +811,10 @@ export class Synchronizer extends DurableObject<Env> {
       if (this.state.seq % 100 === 0) await this.ctx.storage.put('state', this.state)
     }
 
+    // Heartbeat to registry periodically (keeps session visible in UI)
+    // Registry uses TTL on session records, so we need periodic updates
+    if (this.registeredWithRegistry) this.heartbeatRegistry(sockets.length)
+
     // Prune old snapshots periodically
     const currentTime = now()
     if (this.storage && currentTime - this.lastSnapshotPrune > SNAPSHOT_PRUNE_INTERVAL_MS) {
@@ -853,6 +849,98 @@ export class Synchronizer extends DurableObject<Env> {
   private get sessionId(): string {
     return this.sessionName || this.ctx.id.toString()
   }
+
+  // ============================================================================
+  // Registry Integration - Session visibility for monitoring UI
+  // ============================================================================
+
+  /**
+   * Call registry endpoint (uses service binding or HTTP fallback)
+   * This enables session visibility in the management UI
+   */
+  private async callRegistry(endpoint: string, body: Record<string, unknown>): Promise<boolean> {
+    try {
+      const requestInit: RequestInit = {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }
+
+      let response: Response
+
+      // Option 1: Use registry service binding (production)
+      if (this.env.REGISTRY) response = await this.env.REGISTRY.fetch(new Request(`https://registry${endpoint}`, requestInit))
+      // Option 2: HTTP call to registry URL (local dev)
+      else if (this.env.REGISTRY_URL) {
+        const registryUrl = this.env.REGISTRY_URL.replace(/^ws/, 'http')
+        response = await fetch(`${registryUrl}${endpoint}`, requestInit)
+      } else return false // No registry available - skip silently
+
+      if (!response.ok) {
+        console.error(`[${this.sessionId}] Registry ${endpoint} failed: ${response.status}`)
+        return false
+      }
+
+      return true
+    } catch (err) {
+      console.error(`[${this.sessionId}] Registry ${endpoint} error:`, err)
+      return false
+    }
+  }
+
+  /**
+   * Register session with registry (makes it visible in UI)
+   * Called when first client joins
+   */
+  private async registerSession(clientCount: number, appId?: string): Promise<void> {
+    if (this.registeredWithRegistry) return
+
+    const success = await this.callRegistry('/register', {
+      sessionId: this.sessionId,
+      clientCount,
+      appId,
+      synchronizerUrl: this.env.CLUSTER_LABEL || 'synq',
+    })
+
+    if (success) {
+      this.registeredWithRegistry = true
+      this.lastRegistryHeartbeat = Date.now()
+      console.log(`[${this.sessionId}] Registered with registry`)
+    }
+  }
+
+  /**
+   * Unregister session from registry (removes from UI)
+   * Called when last client leaves
+   */
+  private async unregisterSession(): Promise<void> {
+    if (!this.registeredWithRegistry) return
+
+    const success = await this.callRegistry('/unregister', { sessionId: this.sessionId })
+
+    if (success) {
+      this.registeredWithRegistry = false
+      console.log(`[${this.sessionId}] Unregistered from registry`)
+    }
+  }
+
+  /**
+   * Send heartbeat to registry (keeps session visible)
+   * Registry uses TTL on session records, so we need periodic updates
+   */
+  private async heartbeatRegistry(clientCount: number): Promise<void> {
+    const HEARTBEAT_INTERVAL_MS = 60000 // 1 minute
+    const timeSinceLastHeartbeat = Date.now() - this.lastRegistryHeartbeat
+
+    if (timeSinceLastHeartbeat < HEARTBEAT_INTERVAL_MS) return
+
+    const success = await this.callRegistry('/register', { sessionId: this.sessionId, clientCount })
+    if (success) this.lastRegistryHeartbeat = Date.now()
+  }
+
+  // ============================================================================
+  // Utility Methods
+  // ============================================================================
 
   // Utility: ArrayBuffer to Base64
   private arrayBufferToBase64(buffer: ArrayBuffer): string {
