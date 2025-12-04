@@ -5,22 +5,23 @@
  * Manages API keys, sessions, and cluster configuration.
  */
 
-import type {
-  Env,
-  AccessJWTPayload,
-  ApiKeyRecord,
-  SessionRecord,
-  CreateApiKeyRequest,
-  UpdateApiKeyRequest,
-  CreateApiKeyResponse,
-  AuthenticatedUser,
-  AccountRecord,
-  CreateAccountRequest,
-  UpdateAccountRequest,
-  SynchronizerRecord,
-  RegisterSynchronizerRequest,
-  SettingsRecord,
-  SettingKey,
+import {
+  LATENCY_BUCKETS,
+  type Env,
+  type AccessJWTPayload,
+  type ApiKeyRecord,
+  type SessionRecord,
+  type CreateApiKeyRequest,
+  type UpdateApiKeyRequest,
+  type CreateApiKeyResponse,
+  type AuthenticatedUser,
+  type AccountRecord,
+  type CreateAccountRequest,
+  type UpdateAccountRequest,
+  type SynchronizerRecord,
+  type RegisterSynchronizerRequest,
+  type SettingsRecord,
+  type SettingKey,
 } from './types'
 import {
   renderDashboard,
@@ -1633,8 +1634,6 @@ async function getMetricsUI(env: Env, user: AuthenticatedUser): Promise<Response
  * Get Prometheus-compatible metrics (text format)
  */
 async function getPrometheusMetrics(env: Env): Promise<Response> {
-  const LATENCY_BUCKETS = [8, 10, 13, 17, 22, 29, 38, 50, 66, 87, 115, 153, 203, 270, 360]
-
   // Aggregate metrics from all sessions
   const totals = {
     messagesTotal: 0,
@@ -1710,8 +1709,6 @@ async function getPrometheusMetrics(env: Env): Promise<Response> {
  * Get metrics data as JSON (for UI refresh)
  */
 async function getMetricsData(env: Env): Promise<Response> {
-  const LATENCY_BUCKETS = [8, 10, 13, 17, 22, 29, 38, 50, 66, 87, 115, 153, 203, 270, 360]
-
   const sessions: Array<{
     sessionId: string
     appId?: string

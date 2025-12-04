@@ -5,6 +5,8 @@
  * Templates are imported as raw text and use {{placeholder}} syntax.
  */
 
+import { LATENCY_BUCKETS, type SessionMetrics } from './types'
+
 // Import templates as raw text
 import baseTemplate from './templates/base.html'
 import dashboardTemplate from './templates/dashboard.html'
@@ -569,17 +571,6 @@ export function renderMapPage(
 // ============================================================================
 // Metrics Page
 // ============================================================================
-
-// Latency histogram buckets (matching original reflector)
-const LATENCY_BUCKETS = [8, 10, 13, 17, 22, 29, 38, 50, 66, 87, 115, 153, 203, 270, 360]
-
-export interface SessionMetrics {
-  messagesTotal: number
-  ticksTotal: number
-  latencyBuckets: number[]
-  latencySum: number
-  latencyCount: number
-}
 
 export function renderMetricsPage(
   sessions: Array<{
