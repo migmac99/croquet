@@ -16,6 +16,9 @@ import accountsTemplate from './templates/accounts.html'
 import accountsScripts from './templates/accounts-scripts.html'
 import synchronizersTemplate from './templates/synchronizers.html'
 import mapTemplate from './templates/map.html'
+import settingsTemplate from './templates/settings.html'
+// Import compiled Tailwind CSS (wrangler rules configured to import as text)
+import compiledStyles from './styles/output.css'
 
 /**
  * Simple template engine - replaces {{key}} with values
@@ -34,7 +37,7 @@ function renderPage(options: {
   title: string
   content: string
   scripts?: string
-  activePage: 'dashboard' | 'keys' | 'sessions' | 'accounts' | 'synchronizers' | 'map'
+  activePage: 'dashboard' | 'keys' | 'sessions' | 'accounts' | 'synchronizers' | 'map' | 'settings'
   user: string
   cluster: string
 }): string {
@@ -45,6 +48,7 @@ function renderPage(options: {
     title: options.title,
     content: options.content,
     scripts: options.scripts || '',
+    styles: compiledStyles,
     cluster: options.cluster,
     user: options.user,
     user_initial: options.user.charAt(0).toUpperCase(),
@@ -54,6 +58,7 @@ function renderPage(options: {
     nav_accounts_active: options.activePage === 'accounts' ? navActive : navInactive,
     nav_synchronizers_active: options.activePage === 'synchronizers' ? navActive : navInactive,
     nav_map_active: options.activePage === 'map' ? navActive : navInactive,
+    nav_settings_active: options.activePage === 'settings' ? navActive : navInactive,
   })
 }
 
@@ -293,14 +298,14 @@ export function renderSessionsPage(
       <td class="px-6 py-5">
         <span class="text-lg font-semibold">${s.clientCount}</span>
       </td>
-      <td class="px-6 py-5 text-sm text-muted-foreground">
+      <td class="px-6 py-5 text-sm text-muted-foreground whitespace-nowrap">
         ${new Date(s.createdAt).toLocaleString()}
       </td>
-      <td class="px-6 py-5 text-sm text-muted-foreground">
+      <td class="px-6 py-5 text-sm text-muted-foreground whitespace-nowrap">
         ${formatTimeAgo(s.lastSeen)}
       </td>
-      <td class="px-6 py-5">
-        <button onclick="deleteSession('${escapeHtml(s.sessionId)}')" class="btn btn-ghost btn-sm text-red-400 hover:text-red-300">End Session</button>
+      <td class="px-6 py-5 whitespace-nowrap">
+        <button onclick="deleteSession('${escapeHtml(s.sessionId)}')" class="btn btn-ghost btn-sm text-red-400 hover:text-red-300 whitespace-nowrap">End Session</button>
       </td>
     </tr>
   `
@@ -552,6 +557,34 @@ export function renderMapPage(
     title: 'World Map',
     content,
     activePage: 'map',
+    user,
+    cluster,
+  })
+}
+
+// ============================================================================
+// Settings Page
+// ============================================================================
+
+export function renderSettingsPage(
+  settings: {
+    synchronizer_registration_enabled: boolean
+    require_api_key: boolean
+    max_sessions_per_synchronizer: number
+  },
+  user: string,
+  cluster: string
+): string {
+  const content = render(settingsTemplate, {
+    synchronizer_registration_checked: settings.synchronizer_registration_enabled ? 'checked' : '',
+    require_api_key_checked: settings.require_api_key ? 'checked' : '',
+    max_sessions_per_synchronizer: settings.max_sessions_per_synchronizer,
+  })
+
+  return renderPage({
+    title: 'Settings',
+    content,
+    activePage: 'settings',
     user,
     cluster,
   })

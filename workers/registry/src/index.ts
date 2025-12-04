@@ -89,7 +89,7 @@ async function validateApiKey(request: Request, env: Env): Promise<ApiKeyValidat
   const originCheck = isOriginAllowed(getOrigin(request), record.allowedDomains)
   if (!originCheck.allowed) return { valid: false, error: originCheck.error }
 
-  // Update last used (fire and forget)
+  // Update last used (fire and forget) - update both key: and id: records
   const updated: ApiKeyRecord = {
     ...record,
     lastUsed: Date.now(),
@@ -99,11 +99,15 @@ async function validateApiKey(request: Request, env: Env): Promise<ApiKeyValidat
     },
   }
   env.APIKEYS.put(`key:${apiKey}`, JSON.stringify(updated))
+  // Also update id: record (with redacted key) for UI display
+  const { key: _, ...safeUpdated } = updated
+  env.APIKEYS.put(`id:${record.id}`, JSON.stringify({ ...safeUpdated, key: '[REDACTED]' }))
 
   return {
     valid: true,
     keyId: record.id,
     tier: record.tier,
+    accountId: record.accountId,
   }
 }
 
@@ -162,6 +166,7 @@ async function handleDispatch(request: Request, env: Env): Promise<Response> {
     clientCount: 0,
     appId: appId || undefined,
     apiKeyId: validation.keyId,
+    accountId: validation.accountId,
   }
 
   const ttl = Number(env.SESSION_TTL_SECONDS) || 3600
@@ -189,6 +194,7 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
     clientCount?: number
     appId?: string
     synchronizerUrl?: string
+    colo?: string
   }>()
 
   if (!body.sessionId) return Response.json({ error: 'Missing sessionId' }, { status: 400, headers: corsHeaders() })
@@ -203,6 +209,8 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
     clientCount: body.clientCount ?? existing?.clientCount ?? 0,
     appId: body.appId || existing?.appId,
     apiKeyId: existing?.apiKeyId,
+    accountId: existing?.accountId,
+    colo: body.colo || existing?.colo,
   }
 
   const ttl = Number(env.SESSION_TTL_SECONDS) || 3600
@@ -471,7 +479,7 @@ async function handleClientsJoin(request: Request, env: Env): Promise<Response> 
   const originCheck = isOriginAllowed(getOrigin(request), record.allowedDomains)
   if (!originCheck.allowed) return errorResponse(originCheck.error!, 403)
 
-  // Update usage stats (fire and forget)
+  // Update usage stats (fire and forget) - update both key: and id: records
   const updated: ApiKeyRecord = {
     ...record,
     lastUsed: Date.now(),
@@ -481,6 +489,9 @@ async function handleClientsJoin(request: Request, env: Env): Promise<Response> 
     },
   }
   env.APIKEYS.put(`key:${apiKey}`, JSON.stringify(updated))
+  // Also update id: record (with redacted key) for UI display
+  const { key: _, ...safeUpdated } = updated
+  env.APIKEYS.put(`id:${record.id}`, JSON.stringify({ ...safeUpdated, key: '[REDACTED]' }))
 
   // Return developerId (use the key owner's ID or a generated one)
   return jsonResponse({ developerId: record.metadata?.createdBy || record.id })

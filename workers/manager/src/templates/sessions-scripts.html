@@ -11,6 +11,25 @@
     }
   }
 
+  async function purgeAllSessions() {
+    if (
+      !confirm(
+        'Purge ALL sessions? This will remove all session records from the registry. Active connections will be unaffected but will need to re-register.'
+      )
+    )
+      return
+
+    try {
+      const res = await fetch('/sessions/purge', { method: 'POST' })
+      if (!res.ok) throw new Error(await res.text())
+      const data = await res.json()
+      alert(`Purged ${data.deleted} sessions`)
+      location.reload()
+    } catch (err) {
+      alert('Error: ' + err.message)
+    }
+  }
+
   function filterByAccount(accountId) {
     // Filter mobile cards
     document.querySelectorAll('[data-account-id]').forEach((el) => {

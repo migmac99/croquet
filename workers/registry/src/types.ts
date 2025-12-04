@@ -18,6 +18,8 @@ export interface SessionRecord {
   clientCount: number
   appId?: string
   apiKeyId?: string
+  accountId?: string // Account that owns the API key used for this session
+  colo?: string // Cloudflare datacenter code (e.g., 'AMS', 'FRA', 'SFO')
 }
 
 export interface DispatchResponse {
@@ -67,6 +69,9 @@ export interface ApiKeyRecord {
 
   /** Optional metadata */
   metadata?: Record<string, string>
+
+  /** Account ID that owns this key */
+  accountId?: string
 }
 
 /**
@@ -76,5 +81,6 @@ export interface ApiKeyValidation {
   valid: boolean
   keyId?: string
   tier?: string
+  accountId?: string
   error?: string
 }

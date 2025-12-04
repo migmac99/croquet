@@ -95,6 +95,7 @@ export class Synchronizer extends DurableObject<Env> {
   private usersTimer: ReturnType<typeof setTimeout> | null = null // Timer for batched users events
   private registeredWithRegistry = false // Track if we've registered with the registry
   private lastRegistryHeartbeat = 0 // Track last heartbeat to registry
+  private colo: string | null = null // Cloudflare datacenter code (e.g., 'SFO', 'AMS', 'FRA')
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
@@ -113,6 +114,8 @@ export class Synchronizer extends DurableObject<Env> {
     try {
       // Restore session name (logical name from URL, not DO internal ID)
       this.sessionName = (await this.ctx.storage.get<string>('sessionName')) || null
+      // Restore Cloudflare colo (datacenter code)
+      this.colo = (await this.ctx.storage.get<string>('colo')) || null
 
       const stored = await this.ctx.storage.get<SessionState>('state')
       if (stored) {
@@ -160,6 +163,15 @@ export class Synchronizer extends DurableObject<Env> {
     if (headerSessionName && !this.sessionName) {
       this.sessionName = headerSessionName
       await this.ctx.storage.put('sessionName', headerSessionName)
+    }
+
+    // Capture Cloudflare colo (datacenter code like 'AMS', 'FRA', 'SFO')
+    if (!this.colo) {
+      const cf = request.cf as { colo?: string } | undefined
+      if (cf?.colo) {
+        this.colo = cf.colo
+        await this.ctx.storage.put('colo', cf.colo)
+      }
     }
 
     // Check session capacity
@@ -244,6 +256,10 @@ export class Synchronizer extends DurableObject<Env> {
 
       const timeoutMs = Number(this.env.SESSION_TIMEOUT_MS) || 300000
       await this.ctx.storage.setAlarm(Date.now() + timeoutMs)
+    } else if (this.registeredWithRegistry) {
+      // Update client count when clients leave (but session still has clients)
+      const activeCount = this.ctx.getWebSockets().filter((s) => (s.deserializeAttachment() as WSAttachment)?.active).length
+      this.updateClientCount(activeCount)
     }
   }
 
@@ -458,7 +474,13 @@ export class Synchronizer extends DurableObject<Env> {
 
     // Register session with registry for monitoring visibility
     // This is fire-and-forget - don't block the JOIN response
-    if (isEffectivelyFirstClient) this.registerSession(1, args.appId as string | undefined)
+    const activeCount = this.ctx.getWebSockets().filter((s) => (s.deserializeAttachment() as WSAttachment)?.active).length
+    if (isEffectivelyFirstClient) {
+      this.registerSession(activeCount || 1, args.appId as string | undefined)
+    } else if (this.registeredWithRegistry) {
+      // Update client count when additional clients join
+      this.updateClientCount(activeCount + 1) // +1 because this client just became active
+    }
 
     // Debug: log session state for troubleshooting
     console.log(
@@ -793,7 +815,15 @@ export class Synchronizer extends DurableObject<Env> {
    */
   async alarm(): Promise<void> {
     const sockets = this.ctx.getWebSockets()
-    if (sockets.length === 0) return
+    if (sockets.length === 0) {
+      // No clients - session timed out, clean up storage to free resources
+      // Snapshots are kept in R2 for potential recovery
+      console.log(`[${this.sessionId}] Session timed out, cleaning up storage`)
+      await this.ctx.storage.deleteAll()
+      this.state = null
+      this.registeredWithRegistry = false
+      return
+    }
 
     // Tick: advance time and broadcast (official format)
     if (this.state) {
@@ -900,6 +930,7 @@ export class Synchronizer extends DurableObject<Env> {
       clientCount,
       appId,
       synchronizerUrl: this.env.CLUSTER_LABEL || 'synq',
+      colo: this.colo, // Cloudflare datacenter code (e.g., 'AMS', 'FRA', 'SFO')
     })
 
     if (success) {
@@ -936,6 +967,16 @@ export class Synchronizer extends DurableObject<Env> {
 
     const success = await this.callRegistry('/register', { sessionId: this.sessionId, clientCount })
     if (success) this.lastRegistryHeartbeat = Date.now()
+  }
+
+  /**
+   * Update client count in registry (immediate update when clients join/leave)
+   * This keeps the UI in sync without waiting for heartbeat
+   */
+  private async updateClientCount(clientCount: number): Promise<void> {
+    if (!this.registeredWithRegistry) return
+    // Fire-and-forget - don't block the join/leave handler
+    this.callRegistry('/register', { sessionId: this.sessionId, clientCount })
   }
 
   // ============================================================================

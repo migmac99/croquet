@@ -133,6 +133,8 @@ setup_manager_kv() {
     local sessions_ns=$(config '.manager.kv.sessions.namespace')
     local apikeys_ns=$(config '.manager.kv.apikeys.namespace')
     local accounts_ns=$(config '.manager.kv.accounts.namespace')
+    local synchronizers_ns=$(config '.manager.kv.synchronizers.namespace')
+    local settings_ns=$(config '.manager.kv.settings.namespace')
 
     # Reuse registry KV IDs for sessions and apikeys
     SESSIONS_KV_ID=$(setup_kv_namespace "$sessions_ns")
@@ -141,10 +143,27 @@ setup_manager_kv() {
     # Setup accounts KV (manager-specific)
     if [ -n "$accounts_ns" ]; then
         ACCOUNTS_KV_ID=$(setup_kv_namespace "$accounts_ns")
-        # Fallback for local dev - wrangler will create local storage with any ID
         if [ -z "$ACCOUNTS_KV_ID" ]; then
             ACCOUNTS_KV_ID="synq-accounts-local-dev"
             warn "Using placeholder ID for accounts KV (local dev only)"
+        fi
+    fi
+
+    # Setup synchronizers KV (manager-specific)
+    if [ -n "$synchronizers_ns" ]; then
+        SYNCHRONIZERS_KV_ID=$(setup_kv_namespace "$synchronizers_ns")
+        if [ -z "$SYNCHRONIZERS_KV_ID" ]; then
+            SYNCHRONIZERS_KV_ID="db78ac82d365452e803bf7219b1e141c"
+            warn "Using placeholder ID for synchronizers KV (local dev only)"
+        fi
+    fi
+
+    # Setup settings KV (manager-specific)
+    if [ -n "$settings_ns" ]; then
+        SETTINGS_KV_ID=$(setup_kv_namespace "$settings_ns")
+        if [ -z "$SETTINGS_KV_ID" ]; then
+            SETTINGS_KV_ID="74e70219a8c247fdb8fbf2549fc0a84b"
+            warn "Using placeholder ID for settings KV (local dev only)"
         fi
     fi
 }
@@ -392,6 +411,8 @@ generate_mgr_config() {
     local sessions_kv_id="$1"
     local apikeys_kv_id="$2"
     local accounts_kv_id="$3"
+    local synchronizers_kv_id="$4"
+    local settings_kv_id="$5"
     local account_id=$(config '.accountId')
     local name=$(config '.manager.name')
     local domain=$(config '.manager.domain')
@@ -408,6 +429,12 @@ compatibility_date = "2024-11-01"
 compatibility_flags = ["nodejs_compat"]
 account_id = "$account_id"
 
+# Asset import rules - treat HTML and CSS as text
+[[rules]]
+type = "Text"
+globs = ["**/*.html", "**/*.css"]
+fallthrough = true
+
 # Local dev bindings (wrangler creates local KV stores)
 [[kv_namespaces]]
 binding = "SESSIONS"
@@ -420,6 +447,14 @@ id = "$apikeys_kv_id"
 [[kv_namespaces]]
 binding = "ACCOUNTS"
 id = "$accounts_kv_id"
+
+[[kv_namespaces]]
+binding = "SYNCHRONIZERS"
+id = "$synchronizers_kv_id"
+
+[[kv_namespaces]]
+binding = "SETTINGS"
+id = "$settings_kv_id"
 
 [vars]
 SYNCHRONIZER_URL = "ws://localhost:8787"
@@ -450,6 +485,14 @@ id = "$apikeys_kv_id"
 binding = "ACCOUNTS"
 id = "$accounts_kv_id"
 
+[[env.production.kv_namespaces]]
+binding = "SYNCHRONIZERS"
+id = "$synchronizers_kv_id"
+
+[[env.production.kv_namespaces]]
+binding = "SETTINGS"
+id = "$settings_kv_id"
+
 [env.production.vars]
 $vars_toml
 ACCESS_AUD = "e17f88cd436d653b7dd5c79b1f0f3258382f9eb9ee79928a0d49e1cd7841199b"
@@ -478,6 +521,14 @@ id = "$apikeys_kv_id"
 binding = "ACCOUNTS"
 id = "$accounts_kv_id"
 
+[[env.staging.kv_namespaces]]
+binding = "SYNCHRONIZERS"
+id = "$synchronizers_kv_id"
+
+[[env.staging.kv_namespaces]]
+binding = "SETTINGS"
+id = "$settings_kv_id"
+
 [env.staging.vars]
 $vars_toml
 ACCESS_AUD = ""
@@ -491,9 +542,9 @@ deploy_mgr() {
     header "Deploying Manager"
     local domain=$(config '.manager.domain')
 
-    # Setup manager KV namespaces (includes accounts)
+    # Setup manager KV namespaces (includes accounts, synchronizers, settings)
     setup_manager_kv
-    generate_mgr_config "$SESSIONS_KV_ID" "$APIKEYS_KV_ID" "$ACCOUNTS_KV_ID"
+    generate_mgr_config "$SESSIONS_KV_ID" "$APIKEYS_KV_ID" "$ACCOUNTS_KV_ID" "$SYNCHRONIZERS_KV_ID" "$SETTINGS_KV_ID"
 
     cd "$MGR_DIR"
     install_deps "$MGR_DIR"
@@ -533,10 +584,10 @@ run_dev_all() {
 
     # Generate configs
     setup_registry_kv
-    setup_manager_kv  # Also sets up ACCOUNTS_KV_ID
+    setup_manager_kv  # Also sets up ACCOUNTS_KV_ID, SYNCHRONIZERS_KV_ID, SETTINGS_KV_ID
     generate_sync_config "$APIKEYS_KV_ID"
     generate_reg_config "$SESSIONS_KV_ID" "$APIKEYS_KV_ID"
-    generate_mgr_config "$SESSIONS_KV_ID" "$APIKEYS_KV_ID" "$ACCOUNTS_KV_ID"
+    generate_mgr_config "$SESSIONS_KV_ID" "$APIKEYS_KV_ID" "$ACCOUNTS_KV_ID" "$SYNCHRONIZERS_KV_ID" "$SETTINGS_KV_ID"
 
     # Install deps
     install_deps "$SYNC_DIR"

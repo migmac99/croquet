@@ -1,0 +1,253 @@
+/* Custom component styles - Tailwind utilities loaded from CDN */
+
+/* Base styles */
+body {
+  font-family:
+    system-ui,
+    -apple-system,
+    sans-serif;
+}
+
+/* Button components */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: all 150ms;
+  cursor: pointer;
+  white-space: nowrap;
+  height: 2.5rem;
+  padding: 0.5rem 1.25rem;
+}
+
+/* Fix SVG icons inside buttons (Tailwind reset makes them display:block) */
+.btn svg {
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.btn:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px hsl(240 10% 3.9%),
+    0 0 0 4px hsl(240 4.9% 83.9%);
+}
+
+.btn:disabled {
+  pointer-events: none;
+  opacity: 0.5;
+}
+
+.btn-primary {
+  background-color: hsl(0 0% 98%);
+  color: hsl(240 5.9% 10%);
+  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+  height: 2.5rem;
+  padding: 0.5rem 1.25rem;
+}
+
+.btn-primary:hover {
+  background-color: hsl(0 0% 90%);
+}
+
+.btn-secondary {
+  background-color: hsl(240 3.7% 15.9%);
+  color: hsl(0 0% 98%);
+  border: 1px solid hsl(240 3.7% 15.9%);
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  height: 2.5rem;
+  padding: 0.5rem 1.25rem;
+}
+
+.btn-secondary:hover {
+  background-color: hsl(240 3.7% 20%);
+}
+
+.btn-destructive {
+  background-color: hsl(0 62.8% 30.6%);
+  color: hsl(0 0% 98%);
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  height: 2.5rem;
+  padding: 0.5rem 1.25rem;
+}
+
+.btn-destructive:hover {
+  background-color: hsl(0 62.8% 25%);
+}
+
+.btn-outline {
+  background-color: rgb(39 39 42);
+  border: 1px solid rgb(82 82 91);
+  color: hsl(0 0% 98%);
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  height: 2.5rem;
+  padding: 0.5rem 1.25rem;
+}
+
+.btn-outline:hover {
+  background-color: rgb(63 63 70);
+}
+
+.btn-ghost {
+  background-color: rgb(39 39 42 / 0.8);
+  border: 1px solid rgb(63 63 70);
+  color: hsl(0 0% 98%);
+  height: 2.5rem;
+  padding: 0.5rem 1.25rem;
+}
+
+.btn-ghost:hover {
+  background-color: rgb(63 63 70);
+  border-color: rgb(82 82 91);
+}
+
+.btn-sm {
+  height: 2rem;
+  border-radius: 0.375rem;
+  padding: 0.25rem 0.75rem;
+  font-size: 0.75rem;
+}
+
+/* Card component */
+.card {
+  border-radius: 0.75rem;
+  border: 1px solid hsl(240 3.7% 15.9%);
+  background-color: hsl(240 10% 3.9%);
+  color: hsl(0 0% 98%);
+  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+}
+
+/* Input component */
+.input {
+  display: flex;
+  height: 2.5rem;
+  width: 100%;
+  border-radius: 0.5rem;
+  border: 1px solid hsl(240 3.7% 15.9%);
+  background-color: transparent;
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  transition: colors 150ms;
+  color: inherit;
+}
+
+/* Custom dropdown arrow */
+select.input {
+  padding-right: 2.5rem;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%239ca3af'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  background-size: 1rem;
+}
+
+.input::placeholder {
+  color: hsl(240 5% 64.9%);
+}
+
+.input:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px hsl(240 10% 3.9%),
+    0 0 0 4px hsl(240 4.9% 83.9%);
+}
+
+/* Badge component */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 0.375rem;
+  border: 1px solid hsl(240 3.7% 15.9%);
+  padding: 0.125rem 0.625rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  transition: colors 150ms;
+}
+
+.badge-success {
+  border-color: transparent;
+  background-color: rgb(34 197 94 / 0.2);
+  color: rgb(74 222 128);
+}
+
+.badge-warning {
+  border-color: transparent;
+  background-color: rgb(234 179 8 / 0.2);
+  color: rgb(250 204 21);
+}
+
+.badge-destructive {
+  border-color: transparent;
+  background-color: rgb(239 68 68 / 0.2);
+  color: rgb(248 113 113);
+}
+
+/* Dialog styles */
+dialog::backdrop {
+  background: rgba(0, 0, 0, 0.8);
+}
+
+dialog {
+  border-radius: 0.75rem;
+  border: 1px solid hsl(240 3.7% 15.9%);
+  background-color: hsl(240 10% 3.9%);
+  padding: 0;
+  color: hsl(0 0% 98%);
+  box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1);
+}
+
+/* Toast notifications */
+.toast-container {
+  position: fixed;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.toast {
+  background-color: hsl(240 3.7% 15.9%);
+  border: 1px solid hsl(240 3.7% 20%);
+  color: hsl(0 0% 98%);
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.3);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  animation: toast-in 0.2s ease-out;
+  max-width: 300px;
+}
+
+.toast.toast-out {
+  animation: toast-out 0.2s ease-in forwards;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(1rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes toast-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-0.5rem);
+  }
+}

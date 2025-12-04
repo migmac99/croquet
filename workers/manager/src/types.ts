@@ -3,6 +3,8 @@ export interface Env {
   SESSIONS: KVNamespace
   APIKEYS: KVNamespace
   ACCOUNTS: KVNamespace // Sub-accounts for DePIN API
+  SYNCHRONIZERS: KVNamespace // Registered synchronizers
+  SETTINGS: KVNamespace // Global settings (feature flags, etc.)
 
   // Cloudflare Access config
   ACCESS_AUD: string // Application Audience (AUD) tag from Access
@@ -90,6 +92,8 @@ export interface SessionRecord {
   clientCount: number
   appId?: string
   apiKeyId?: string
+  accountId?: string // Account that owns the API key used for this session
+  colo?: string // Cloudflare datacenter code (e.g., 'AMS', 'FRA', 'SFO')
 }
 
 /**
@@ -200,3 +204,93 @@ export interface UpdateAccountRequest {
   active?: boolean
   metadata?: Record<string, string>
 }
+
+/**
+ * Synchronizer record stored in KV
+ * Storage: `url:{url}` (base64 encoded URL as key)
+ */
+export interface SynchronizerRecord {
+  /** Synchronizer WebSocket URL (e.g., wss://synq.alma.dev) */
+  url: string
+
+  /** Human-readable label/name */
+  label: string
+
+  /** Cloudflare datacenter code (e.g., 'SFO', 'AMS', 'FRA') */
+  colo?: string
+
+  /** Geographic region description */
+  region?: string
+
+  /** Latitude coordinate for map display */
+  lat?: number
+
+  /** Longitude coordinate for map display */
+  lon?: number
+
+  /** Is the synchronizer active/healthy? */
+  active: boolean
+
+  /** First seen timestamp */
+  firstSeen: number
+
+  /** Last heartbeat timestamp */
+  lastSeen: number
+
+  /** Current session count (from last heartbeat) */
+  sessionCount: number
+
+  /** Current client count (from last heartbeat) */
+  clientCount: number
+
+  /** Cluster label this synchronizer belongs to */
+  clusterLabel?: string
+
+  /** Optional metadata */
+  metadata?: Record<string, string>
+}
+
+/**
+ * Request to register/update a synchronizer
+ */
+export interface RegisterSynchronizerRequest {
+  url: string
+  label?: string
+  colo?: string
+  region?: string
+  lat?: number
+  lon?: number
+  sessionCount?: number
+  clientCount?: number
+  clusterLabel?: string
+  metadata?: Record<string, string>
+}
+
+/**
+ * Global settings stored in KV
+ * Storage: `setting:{key}`
+ */
+export interface SettingsRecord {
+  /** Setting key */
+  key: string
+
+  /** Setting value */
+  value: string | boolean | number
+
+  /** Description */
+  description?: string
+
+  /** Last modified timestamp */
+  lastModified: number
+
+  /** Who last modified this setting */
+  modifiedBy?: string
+}
+
+/**
+ * Known settings keys
+ */
+export type SettingKey =
+  | 'synchronizer_registration_enabled' // Enable/disable synchronizer self-registration
+  | 'require_api_key' // Require API key for session creation
+  | 'max_sessions_per_synchronizer' // Max sessions per synchronizer

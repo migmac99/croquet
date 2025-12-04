@@ -52,6 +52,14 @@
       "accounts": {
         "namespace": "synq-accounts",
         "createIfMissing": true
+      },
+      "synchronizers": {
+        "namespace": "synq-synchronizers",
+        "createIfMissing": true
+      },
+      "settings": {
+        "namespace": "synq-settings",
+        "createIfMissing": true
       }
     },
     "vars": {

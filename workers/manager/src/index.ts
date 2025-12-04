@@ -17,8 +17,12 @@ import type {
   AccountRecord,
   CreateAccountRequest,
   UpdateAccountRequest,
+  SynchronizerRecord,
+  RegisterSynchronizerRequest,
+  SettingsRecord,
+  SettingKey,
 } from './types'
-import { renderDashboard, renderKeysPage, renderSessionsPage, renderAccountsPage, renderSynchronizersPage, renderMapPage } from './ui'
+import { renderDashboard, renderKeysPage, renderSessionsPage, renderAccountsPage, renderSynchronizersPage, renderMapPage, renderSettingsPage } from './ui'
 
 /**
  * Verify Bearer token auth against stored account secrets
@@ -238,6 +242,7 @@ export default {
       if (path === '/ui/accounts') return await getAccountsUI(env, user) // Accounts UI
       if (path === '/ui/synchronizers') return await getSynchronizersUI(env, user) // Synchronizers UI
       if (path === '/ui/map') return await getMapUI(env, user) // Map UI
+      if (path === '/ui/settings') return await getSettingsUI(env, user) // Settings UI
 
       // ========================================
       // API Routes (JSON)
@@ -265,6 +270,11 @@ export default {
       // Sessions management
       if (path === '/sessions' || path === '/sessions/') {
         if (request.method === 'GET') return await listSessions(env)
+      }
+
+      // Purge all sessions
+      if (path === '/sessions/purge' && request.method === 'POST') {
+        return await purgeAllSessions(env, user)
       }
 
       // Single session operations
@@ -341,6 +351,33 @@ export default {
       // Roll (regenerate) account secret
       const rollAccountMatch = path.match(/^\/accounts\/([a-f0-9]+)\/roll$/)
       if (rollAccountMatch && request.method === 'POST') return await rollAccountSecret(rollAccountMatch[1], env, user)
+
+      // Synchronizers management (registered synchronizers in KV)
+      if (path === '/synchronizers' || path === '/synchronizers/') {
+        if (request.method === 'GET') return await listSynchronizers(env)
+        if (request.method === 'POST') return await registerSynchronizer(request, env)
+      }
+
+      // Single synchronizer operations (URL-safe base64 encoded URL as ID)
+      const syncMatch = path.match(/^\/synchronizers\/(.+)$/)
+      if (syncMatch) {
+        const syncId = decodeURIComponent(syncMatch[1])
+        if (request.method === 'GET') return await getSynchronizer(syncId, env)
+        if (request.method === 'DELETE') return await deleteSynchronizer(syncId, env, user)
+      }
+
+      // Settings management
+      if (path === '/settings' || path === '/settings/') {
+        if (request.method === 'GET') return await listSettings(env)
+      }
+
+      // Single setting operations
+      const settingMatch = path.match(/^\/settings\/([a-z_]+)$/)
+      if (settingMatch) {
+        const key = settingMatch[1]
+        if (request.method === 'GET') return await getSetting(key, env)
+        if (request.method === 'PUT') return await updateSetting(key, request, env, user)
+      }
 
       return error('Not found', 404)
     } catch (err) {
@@ -824,6 +861,26 @@ async function deleteSession(sessionId: string, env: Env, user: AuthenticatedUse
   return json({ deleted: true, sessionId })
 }
 
+async function purgeAllSessions(env: Env, user: AuthenticatedUser): Promise<Response> {
+  let deleted = 0
+  let cursor: string | undefined
+
+  do {
+    const list = await env.SESSIONS.list({ cursor, limit: 1000 })
+
+    // Delete all sessions in this batch
+    for (const key of list.keys) {
+      await env.SESSIONS.delete(key.name)
+      deleted++
+    }
+
+    cursor = list.list_complete ? undefined : list.cursor
+  } while (cursor)
+
+  console.log(`All sessions purged: ${deleted} sessions deleted by ${user.email}`)
+  return json({ deleted, purgedBy: user.email })
+}
+
 // ============================================================================
 // Account Handlers (Sub-accounts for DePIN API)
 // ============================================================================
@@ -956,6 +1013,164 @@ async function rollAccountSecret(accountId: string, env: Env, user: Authenticate
 
   // Return full record including new secret
   return json(updated)
+}
+
+// ============================================================================
+// Synchronizer Functions (KV-based registry)
+// ============================================================================
+
+/**
+ * List all registered synchronizers from KV
+ */
+async function listSynchronizers(env: Env): Promise<Response> {
+  const synchronizers: SynchronizerRecord[] = []
+  let cursor: string | undefined
+
+  do {
+    const list = await env.SYNCHRONIZERS.list({ prefix: 'url:', cursor, limit: 1000 })
+    for (const key of list.keys) {
+      const record = await env.SYNCHRONIZERS.get<SynchronizerRecord>(key.name, 'json')
+      if (record) synchronizers.push(record)
+    }
+    cursor = list.list_complete ? undefined : list.cursor
+  } while (cursor)
+
+  // Sort by last seen (most recent first)
+  synchronizers.sort((a, b) => b.lastSeen - a.lastSeen)
+
+  return json({ synchronizers, count: synchronizers.length })
+}
+
+/**
+ * Register or update a synchronizer
+ * Called by synchronizers during startup/heartbeat
+ */
+async function registerSynchronizer(request: Request, env: Env): Promise<Response> {
+  // Check if registration is enabled
+  const settingEnabled = await env.SETTINGS.get<SettingsRecord>('setting:synchronizer_registration_enabled', 'json')
+  if (settingEnabled && settingEnabled.value === false) {
+    return error('Synchronizer registration is disabled', 403)
+  }
+
+  const body = (await request.json()) as RegisterSynchronizerRequest
+  if (!body.url) return error('url is required', 400)
+
+  // Create URL-safe key from the URL
+  const key = `url:${btoa(body.url).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')}`
+
+  // Check for existing record
+  const existing = await env.SYNCHRONIZERS.get<SynchronizerRecord>(key, 'json')
+
+  const record: SynchronizerRecord = {
+    url: body.url,
+    label: body.label || body.url.replace(/^wss?:\/\//, '').replace(/\/$/, ''),
+    colo: body.colo || existing?.colo,
+    region: body.region || existing?.region,
+    lat: body.lat ?? existing?.lat,
+    lon: body.lon ?? existing?.lon,
+    active: true,
+    firstSeen: existing?.firstSeen || Date.now(),
+    lastSeen: Date.now(),
+    sessionCount: body.sessionCount ?? existing?.sessionCount ?? 0,
+    clientCount: body.clientCount ?? existing?.clientCount ?? 0,
+    clusterLabel: body.clusterLabel || existing?.clusterLabel,
+    metadata: body.metadata || existing?.metadata,
+  }
+
+  await env.SYNCHRONIZERS.put(key, JSON.stringify(record))
+
+  console.log(`Synchronizer registered/updated: ${body.url}`)
+  return json(record, existing ? 200 : 201)
+}
+
+/**
+ * Get a single synchronizer by URL
+ */
+async function getSynchronizer(url: string, env: Env): Promise<Response> {
+  const key = `url:${btoa(url).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')}`
+  const record = await env.SYNCHRONIZERS.get<SynchronizerRecord>(key, 'json')
+  if (!record) return error('Synchronizer not found', 404)
+  return json(record)
+}
+
+/**
+ * Delete a synchronizer registration
+ */
+async function deleteSynchronizer(url: string, env: Env, user: AuthenticatedUser): Promise<Response> {
+  const key = `url:${btoa(url).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')}`
+  const existing = await env.SYNCHRONIZERS.get(key)
+  if (!existing) return error('Synchronizer not found', 404)
+
+  await env.SYNCHRONIZERS.delete(key)
+  console.log(`Synchronizer deleted: ${url} by ${user.email}`)
+  return json({ success: true })
+}
+
+// ============================================================================
+// Settings Functions
+// ============================================================================
+
+/**
+ * List all settings
+ */
+async function listSettings(env: Env): Promise<Response> {
+  const settings: SettingsRecord[] = []
+  let cursor: string | undefined
+
+  do {
+    const list = await env.SETTINGS.list({ prefix: 'setting:', cursor, limit: 100 })
+    for (const key of list.keys) {
+      const record = await env.SETTINGS.get<SettingsRecord>(key.name, 'json')
+      if (record) settings.push(record)
+    }
+    cursor = list.list_complete ? undefined : list.cursor
+  } while (cursor)
+
+  return json({ settings })
+}
+
+/**
+ * Get a single setting by key
+ */
+async function getSetting(key: string, env: Env): Promise<Response> {
+  const record = await env.SETTINGS.get<SettingsRecord>(`setting:${key}`, 'json')
+  if (!record) {
+    // Return default value for known settings
+    const defaults: Record<SettingKey, SettingsRecord> = {
+      synchronizer_registration_enabled: {
+        key: 'synchronizer_registration_enabled',
+        value: true,
+        description: 'Enable synchronizer self-registration',
+        lastModified: 0,
+      },
+      require_api_key: { key: 'require_api_key', value: true, description: 'Require API key for session creation', lastModified: 0 },
+      max_sessions_per_synchronizer: { key: 'max_sessions_per_synchronizer', value: 1000, description: 'Maximum sessions per synchronizer', lastModified: 0 },
+    }
+    const defaultRecord = defaults[key as SettingKey]
+    if (defaultRecord) return json(defaultRecord)
+    return error('Setting not found', 404)
+  }
+  return json(record)
+}
+
+/**
+ * Update a setting
+ */
+async function updateSetting(key: string, request: Request, env: Env, user: AuthenticatedUser): Promise<Response> {
+  const body = (await request.json()) as { value: string | boolean | number; description?: string }
+  if (body.value === undefined) return error('value is required', 400)
+
+  const record: SettingsRecord = {
+    key,
+    value: body.value,
+    description: body.description,
+    lastModified: Date.now(),
+    modifiedBy: user.email,
+  }
+
+  await env.SETTINGS.put(`setting:${key}`, JSON.stringify(record))
+  console.log(`Setting updated: ${key} = ${body.value} by ${user.email}`)
+  return json(record)
 }
 
 // ============================================================================
@@ -1116,12 +1331,13 @@ async function getSessionsUI(env: Env, user: AuthenticatedUser): Promise<Respons
   accounts.sort((a, b) => a.name.localeCompare(b.name))
 
   // Enrich sessions with account info
+  // Use accountId directly from session if available (new sessions), otherwise fall back to API key lookup (legacy)
   const enrichedSessions = sessions.map((s) => {
-    const keyInfo = s.apiKeyId ? apiKeyAccountMap.get(s.apiKeyId) : undefined
+    const accountId = s.accountId || (s.apiKeyId ? apiKeyAccountMap.get(s.apiKeyId)?.accountId : undefined)
     return {
       ...s,
-      accountId: keyInfo?.accountId,
-      accountName: keyInfo?.accountId ? accountNameMap.get(keyInfo.accountId) : undefined,
+      accountId,
+      accountName: accountId ? accountNameMap.get(accountId) : undefined,
     }
   })
 
@@ -1198,12 +1414,72 @@ async function getSynchronizersUI(env: Env, user: AuthenticatedUser): Promise<Re
   return html(renderSynchronizersPage(syncList, user.email, env.CLUSTER_LABEL))
 }
 
-// Known synchronizer locations for map visualization
-const SYNCHRONIZER_LOCATIONS: Record<string, { region: string; lat: number; lon: number }> = {
-  'synq.alma.dev': { region: 'US-West', lat: 37.7749, lon: -122.4194 },
-  'wss://synq.alma.dev': { region: 'US-West', lat: 37.7749, lon: -122.4194 },
-  'alma-prod': { region: 'US-West', lat: 37.7749, lon: -122.4194 },
-  'local-dev': { region: 'Local', lat: 40.7128, lon: -74.006 },
+// Cloudflare datacenter (colo) coordinates for map visualization
+// See: https://www.cloudflare.com/network/
+const COLO_LOCATIONS: Record<string, { region: string; lat: number; lon: number }> = {
+  // North America
+  SFO: { region: 'US-West (San Francisco)', lat: 37.6213, lon: -122.379 },
+  LAX: { region: 'US-West (Los Angeles)', lat: 33.9425, lon: -118.408 },
+  SEA: { region: 'US-West (Seattle)', lat: 47.4502, lon: -122.309 },
+  PDX: { region: 'US-West (Portland)', lat: 45.5898, lon: -122.596 },
+  DEN: { region: 'US-West (Denver)', lat: 39.8561, lon: -104.674 },
+  PHX: { region: 'US-West (Phoenix)', lat: 33.4373, lon: -112.008 },
+  DFW: { region: 'US-Central (Dallas)', lat: 32.8998, lon: -97.0403 },
+  IAH: { region: 'US-Central (Houston)', lat: 29.9902, lon: -95.3368 },
+  ORD: { region: 'US-Central (Chicago)', lat: 41.9742, lon: -87.9073 },
+  ATL: { region: 'US-East (Atlanta)', lat: 33.6407, lon: -84.4277 },
+  MIA: { region: 'US-East (Miami)', lat: 25.7959, lon: -80.287 },
+  IAD: { region: 'US-East (Washington DC)', lat: 38.9531, lon: -77.4565 },
+  EWR: { region: 'US-East (Newark)', lat: 40.6895, lon: -74.1745 },
+  JFK: { region: 'US-East (New York)', lat: 40.6413, lon: -73.7781 },
+  BOS: { region: 'US-East (Boston)', lat: 42.3656, lon: -71.0096 },
+  YYZ: { region: 'Canada (Toronto)', lat: 43.6777, lon: -79.6248 },
+  YVR: { region: 'Canada (Vancouver)', lat: 49.1967, lon: -123.1815 },
+  YUL: { region: 'Canada (Montreal)', lat: 45.4657, lon: -73.7455 },
+  // Europe
+  LHR: { region: 'UK (London)', lat: 51.47, lon: -0.4543 },
+  MAN: { region: 'UK (Manchester)', lat: 53.3537, lon: -2.275 },
+  AMS: { region: 'Netherlands (Amsterdam)', lat: 52.3105, lon: 4.7683 },
+  FRA: { region: 'Germany (Frankfurt)', lat: 50.0379, lon: 8.5622 },
+  CDG: { region: 'France (Paris)', lat: 49.0097, lon: 2.5479 },
+  MAD: { region: 'Spain (Madrid)', lat: 40.4936, lon: -3.5668 },
+  BCN: { region: 'Spain (Barcelona)', lat: 41.2974, lon: 2.0833 },
+  LIS: { region: 'Portugal (Lisbon)', lat: 38.775, lon: -9.1356 },
+  MXP: { region: 'Italy (Milan)', lat: 45.6306, lon: 8.7231 },
+  FCO: { region: 'Italy (Rome)', lat: 41.8003, lon: 12.2389 },
+  ZRH: { region: 'Switzerland (Zurich)', lat: 47.4582, lon: 8.5555 },
+  VIE: { region: 'Austria (Vienna)', lat: 48.1103, lon: 16.5697 },
+  PRG: { region: 'Czech Republic (Prague)', lat: 50.1008, lon: 14.26 },
+  WAW: { region: 'Poland (Warsaw)', lat: 52.1672, lon: 20.9679 },
+  ARN: { region: 'Sweden (Stockholm)', lat: 59.6498, lon: 17.9238 },
+  CPH: { region: 'Denmark (Copenhagen)', lat: 55.618, lon: 12.656 },
+  HEL: { region: 'Finland (Helsinki)', lat: 60.3183, lon: 24.9497 },
+  OSL: { region: 'Norway (Oslo)', lat: 60.1976, lon: 11.1004 },
+  DUB: { region: 'Ireland (Dublin)', lat: 53.4264, lon: -6.2499 },
+  BRU: { region: 'Belgium (Brussels)', lat: 50.9014, lon: 4.4844 },
+  // Asia Pacific
+  NRT: { region: 'Japan (Tokyo)', lat: 35.7647, lon: 140.3864 },
+  KIX: { region: 'Japan (Osaka)', lat: 34.4347, lon: 135.244 },
+  HKG: { region: 'Hong Kong', lat: 22.308, lon: 113.9185 },
+  SIN: { region: 'Singapore', lat: 1.3644, lon: 103.9915 },
+  ICN: { region: 'South Korea (Seoul)', lat: 37.4602, lon: 126.4407 },
+  TPE: { region: 'Taiwan (Taipei)', lat: 25.0797, lon: 121.2342 },
+  BOM: { region: 'India (Mumbai)', lat: 19.0896, lon: 72.8656 },
+  DEL: { region: 'India (Delhi)', lat: 28.5562, lon: 77.1 },
+  SYD: { region: 'Australia (Sydney)', lat: -33.9399, lon: 151.1753 },
+  MEL: { region: 'Australia (Melbourne)', lat: -37.6733, lon: 144.8433 },
+  AKL: { region: 'New Zealand (Auckland)', lat: -37.0082, lon: 174.7917 },
+  // South America
+  GRU: { region: 'Brazil (Sao Paulo)', lat: -23.4356, lon: -46.4731 },
+  GIG: { region: 'Brazil (Rio de Janeiro)', lat: -22.8099, lon: -43.2506 },
+  EZE: { region: 'Argentina (Buenos Aires)', lat: -34.8222, lon: -58.5358 },
+  SCL: { region: 'Chile (Santiago)', lat: -33.393, lon: -70.7858 },
+  BOG: { region: 'Colombia (Bogota)', lat: 4.7016, lon: -74.1469 },
+  // Middle East / Africa
+  DXB: { region: 'UAE (Dubai)', lat: 25.2532, lon: 55.3657 },
+  JNB: { region: 'South Africa (Johannesburg)', lat: -26.1367, lon: 28.242 },
+  CPT: { region: 'South Africa (Cape Town)', lat: -33.9715, lon: 18.6021 },
+  TLV: { region: 'Israel (Tel Aviv)', lat: 32.0055, lon: 34.8854 },
 }
 
 async function getMapUI(env: Env, user: AuthenticatedUser): Promise<Response> {
@@ -1216,6 +1492,7 @@ async function getMapUI(env: Env, user: AuthenticatedUser): Promise<Response> {
       sessionCount: number
       clientCount: number
       lastSeen: number
+      colo?: string
       region?: string
       lat?: number
       lon?: number
@@ -1237,17 +1514,20 @@ async function getMapUI(env: Env, user: AuthenticatedUser): Promise<Response> {
         existing.sessionCount++
         existing.clientCount += session.clientCount || 0
         existing.lastSeen = Math.max(existing.lastSeen, session.lastSeen)
+        // Update colo if not set yet (use first session's colo)
+        if (!existing.colo && session.colo) existing.colo = session.colo
       } else {
         const label = syncUrl.replace(/^wss?:\/\//, '').replace(/\/$/, '')
-        // Look up known location
-        const location = SYNCHRONIZER_LOCATIONS[syncUrl] || SYNCHRONIZER_LOCATIONS[label] || SYNCHRONIZER_LOCATIONS[env.CLUSTER_LABEL]
+        // Look up location from session's colo (Cloudflare datacenter code)
+        const location = session.colo ? COLO_LOCATIONS[session.colo] : undefined
         synchronizers.set(syncUrl, {
           url: syncUrl,
           label,
           sessionCount: 1,
           clientCount: session.clientCount || 0,
           lastSeen: session.lastSeen,
-          region: location?.region || env.CLUSTER_LABEL,
+          colo: session.colo,
+          region: location?.region || session.colo || env.CLUSTER_LABEL,
           lat: location?.lat,
           lon: location?.lon,
         })
@@ -1257,26 +1537,50 @@ async function getMapUI(env: Env, user: AuthenticatedUser): Promise<Response> {
     cursor = list.list_complete ? undefined : list.cursor
   } while (cursor)
 
+  // Always include the configured SYNCHRONIZER_URL, even if no sessions exist
+  const defaultSyncUrl = env.SYNCHRONIZER_URL
+  if (!synchronizers.has(defaultSyncUrl)) {
+    const label = defaultSyncUrl.replace(/^wss?:\/\//, '').replace(/\/$/, '')
+    synchronizers.set(defaultSyncUrl, {
+      url: defaultSyncUrl,
+      label,
+      sessionCount: 0,
+      clientCount: 0,
+      lastSeen: Date.now(),
+      region: env.CLUSTER_LABEL || 'Unknown Location',
+      // Antarctica for unknown locations
+      lat: -82.8628,
+      lon: 135.0,
+    })
+  }
+
   const syncList = Array.from(synchronizers.values())
 
-  // Build GeoJSON (only include synchronizers with known coordinates)
-  const features = syncList
-    .filter((s) => s.lat !== undefined && s.lon !== undefined)
-    .map((s) => ({
-      type: 'Feature' as const,
-      geometry: {
-        type: 'Point' as const,
-        coordinates: [s.lon!, s.lat!],
-      },
-      properties: {
-        url: s.url,
-        label: s.label,
-        region: s.region,
-        sessionCount: s.sessionCount,
-        clientCount: s.clientCount,
-        lastSeen: s.lastSeen,
-      },
-    }))
+  // For synchronizers without colo-based coordinates, place in Antarctica
+  for (const sync of syncList) {
+    if (sync.lat === undefined || sync.lon === undefined) {
+      sync.lat = -82.8628 // Antarctica
+      sync.lon = 135.0
+      sync.region = sync.region || 'Unknown Location'
+    }
+  }
+
+  // Build GeoJSON (now all synchronizers should have coordinates)
+  const features = syncList.map((s) => ({
+    type: 'Feature' as const,
+    geometry: {
+      type: 'Point' as const,
+      coordinates: [s.lon!, s.lat!],
+    },
+    properties: {
+      url: s.url,
+      label: s.label,
+      region: s.region,
+      sessionCount: s.sessionCount,
+      clientCount: s.clientCount,
+      lastSeen: s.lastSeen,
+    },
+  }))
 
   const geoJsonData = { type: 'FeatureCollection', features }
   const totals = {
@@ -1286,4 +1590,25 @@ async function getMapUI(env: Env, user: AuthenticatedUser): Promise<Response> {
   }
 
   return html(renderMapPage(geoJsonData, totals, user.email, env.CLUSTER_LABEL))
+}
+
+/**
+ * Get Settings UI page
+ */
+async function getSettingsUI(env: Env, user: AuthenticatedUser): Promise<Response> {
+  // Helper to get setting value from KV with defaults
+  async function getSettingValue<T>(key: SettingKey, defaultValue: T): Promise<T> {
+    const record = await env.SETTINGS.get<SettingsRecord>(`setting:${key}`, 'json')
+    if (!record) return defaultValue
+    return record.value as T
+  }
+
+  // Load settings with defaults
+  const settings = {
+    synchronizer_registration_enabled: await getSettingValue('synchronizer_registration_enabled', true),
+    require_api_key: await getSettingValue('require_api_key', true),
+    max_sessions_per_synchronizer: await getSettingValue('max_sessions_per_synchronizer', 1000),
+  }
+
+  return html(renderSettingsPage(settings, user.email, env.CLUSTER_LABEL))
 }

@@ -153,6 +153,23 @@
 </script>
 
 <style>
+  /* Ensure map stays below sidebar (sidebar uses z-50 = 50) */
+  #map {
+    position: relative;
+    z-index: 0;
+  }
+
+  /* Leaflet elements should stay within the map container */
+  .leaflet-pane,
+  .leaflet-control {
+    z-index: auto !important;
+  }
+
+  .leaflet-top,
+  .leaflet-bottom {
+    z-index: 40 !important;
+  }
+
   /* Dark theme popup styling */
   .leaflet-popup-content-wrapper {
     background: hsl(var(--card));
