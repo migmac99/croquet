@@ -205,6 +205,7 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
     appId?: string
     synchronizerUrl?: string
     colo?: string
+    doColo?: string
     lat?: number
     lon?: number
     region?: string
@@ -225,6 +226,7 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
     apiKeyId: existing?.apiKeyId,
     accountId: existing?.accountId,
     colo: body.colo || existing?.colo,
+    doColo: body.doColo || existing?.doColo,
     lat: body.lat ?? existing?.lat,
     lon: body.lon ?? existing?.lon,
     region: body.region || existing?.region,

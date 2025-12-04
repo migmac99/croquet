@@ -1509,10 +1509,13 @@ async function getMapUI(env: Env, user: AuthenticatedUser): Promise<Response> {
       sessionCount: number
       clientCount: number
       lastSeen: number
-      colo?: string
+      colo?: string // Client edge location
+      doColo?: string // DO's actual location
       region?: string
-      lat?: number
+      lat?: number // Edge location coordinates
       lon?: number
+      doLat?: number // DO location coordinates
+      doLon?: number
     }
   >()
 
@@ -1533,10 +1536,20 @@ async function getMapUI(env: Env, user: AuthenticatedUser): Promise<Response> {
         existing.lastSeen = Math.max(existing.lastSeen, session.lastSeen)
         // Update colo if not set yet (use first session's colo)
         if (!existing.colo && session.colo) existing.colo = session.colo
+        // Update doColo if not set yet (use first session's doColo)
+        if (!existing.doColo && session.doColo) {
+          existing.doColo = session.doColo
+          const doColoLocation = COLO_LOCATIONS[session.doColo]
+          if (doColoLocation) {
+            existing.doLat = doColoLocation.lat
+            existing.doLon = doColoLocation.lon
+          }
+        }
       } else {
         const label = syncUrl.replace(/^wss?:\/\//, '').replace(/\/$/, '')
         // Use explicit lat/lon from session if available, otherwise look up from colo
         const coloLocation = session.colo ? COLO_LOCATIONS[session.colo] : undefined
+        const doColoLocation = session.doColo ? COLO_LOCATIONS[session.doColo] : undefined
         synchronizers.set(syncUrl, {
           url: syncUrl,
           label,
@@ -1544,9 +1557,12 @@ async function getMapUI(env: Env, user: AuthenticatedUser): Promise<Response> {
           clientCount: session.clientCount || 0,
           lastSeen: session.lastSeen,
           colo: session.colo,
+          doColo: session.doColo,
           region: session.region || coloLocation?.region || session.colo || env.CLUSTER_LABEL,
           lat: session.lat ?? coloLocation?.lat,
           lon: session.lon ?? coloLocation?.lon,
+          doLat: doColoLocation?.lat,
+          doLon: doColoLocation?.lon,
         })
       }
     }
@@ -1579,6 +1595,11 @@ async function getMapUI(env: Env, user: AuthenticatedUser): Promise<Response> {
       sessionCount: s.sessionCount,
       clientCount: s.clientCount,
       lastSeen: s.lastSeen,
+      // DO location data for connecting lines visualization
+      colo: s.colo,
+      doColo: s.doColo,
+      doLat: s.doLat,
+      doLon: s.doLon,
     },
   }))
 

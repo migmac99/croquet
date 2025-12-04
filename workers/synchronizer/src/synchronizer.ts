@@ -124,7 +124,9 @@ export class Synchronizer extends DurableObject<Env> {
   private usersTimer: ReturnType<typeof setTimeout> | null = null // Timer for batched users events
   private registeredWithRegistry = false // Track if we've registered with the registry
   private lastRegistryHeartbeat = 0 // Track last heartbeat to registry
-  private colo: string | null = null // Cloudflare datacenter code (e.g., 'SFO', 'AMS', 'FRA')
+  private colo: string | null = null // Client edge datacenter code (from request.cf.colo)
+  private doColo: string | null = null // DO's actual location (detected via cdn-cgi/trace)
+  private doLocationDetectionStarted = false // Prevent multiple detection attempts
   private metrics: SessionMetrics = createEmptyMetrics() // Prometheus-compatible metrics (matches original reflector)
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -144,8 +146,10 @@ export class Synchronizer extends DurableObject<Env> {
     try {
       // Restore session name (logical name from URL, not DO internal ID)
       this.sessionName = (await this.ctx.storage.get<string>('sessionName')) || null
-      // Restore Cloudflare colo (datacenter code)
+      // Restore client edge colo (datacenter code from request.cf.colo)
       this.colo = (await this.ctx.storage.get<string>('colo')) || null
+      // Restore DO's actual location (detected via cdn-cgi/trace)
+      this.doColo = (await this.ctx.storage.get<string>('doColo')) || null
 
       const stored = await this.ctx.storage.get<SessionState>('state')
       if (stored) {
@@ -181,6 +185,8 @@ export class Synchronizer extends DurableObject<Env> {
         status: 'ok',
         clients: sockets.length,
         hibernatable: true,
+        colo: this.colo, // Client edge location (from request.cf.colo)
+        doColo: this.doColo, // DO's actual location (detected via cdn-cgi/trace)
         state: this.state,
       })
     }
@@ -238,6 +244,9 @@ export class Synchronizer extends DurableObject<Env> {
 
     // Ensure ticking is scheduled
     this.scheduleTick()
+
+    // Detect DO location (fire-and-forget, only runs once)
+    this.detectDoLocation()
 
     return new Response(null, { status: 101, webSocket: client })
   }
@@ -1353,7 +1362,8 @@ export class Synchronizer extends DurableObject<Env> {
       clientCount,
       appId,
       synchronizerUrl: this.env.CLUSTER_LABEL || 'synq',
-      colo: this.colo, // Cloudflare datacenter code (e.g., 'AMS', 'FRA', 'SFO')
+      colo: this.colo, // Client edge datacenter code (e.g., 'AMS', 'FRA', 'SFO')
+      doColo: this.doColo, // DO's actual location (may be null initially, updated on heartbeat)
       // For non-CF deployments, use env-based location
       lat: this.env.SYNC_LAT ? parseFloat(this.env.SYNC_LAT) : undefined,
       lon: this.env.SYNC_LON ? parseFloat(this.env.SYNC_LON) : undefined,
@@ -1397,6 +1407,7 @@ export class Synchronizer extends DurableObject<Env> {
       sessionId: this.sessionId,
       clientCount,
       colo: this.colo, // Include colo in case it wasn't sent in initial registration
+      doColo: this.doColo, // Include doColo (may have been detected after initial registration)
       metrics: this.metrics,
     })
     if (success) this.lastRegistryHeartbeat = Date.now()
@@ -1430,5 +1441,46 @@ export class Synchronizer extends DurableObject<Env> {
     const bytes = new Uint8Array(binary.length)
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
     return bytes.buffer
+  }
+
+  /**
+   * Detect the DO's actual location by fetching cloudflare.com/cdn-cgi/trace
+   * The colo field in the response indicates which datacenter the request exits from,
+   * which is where the DO is running.
+   *
+   * Response format:
+   * fl=123...
+   * h=cloudflare.com
+   * ip=...
+   * ...
+   * colo=SFO
+   * ...
+   */
+  private async detectDoLocation(): Promise<void> {
+    // Skip if already detected or detection in progress
+    if (this.doColo || this.doLocationDetectionStarted) return
+    this.doLocationDetectionStarted = true
+
+    try {
+      // Use 1.1.1.1 as it's faster than cloudflare.com
+      const response = await fetch('https://1.1.1.1/cdn-cgi/trace')
+      if (!response.ok) {
+        console.error(`[${this.sessionId}] DO location detection failed: ${response.status}`)
+        return
+      }
+
+      const text = await response.text()
+      // Parse the key=value format to find colo
+      const match = text.match(/^colo=([A-Z]{3})$/m)
+      if (match) {
+        this.doColo = match[1]
+        await this.ctx.storage.put('doColo', this.doColo)
+        console.log(`[${this.sessionId}] DO location detected: ${this.doColo}`)
+      } else {
+        console.warn(`[${this.sessionId}] DO location detection: colo not found in response`)
+      }
+    } catch (err) {
+      console.error(`[${this.sessionId}] DO location detection error:`, err)
+    }
   }
 }

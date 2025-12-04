@@ -16,7 +16,8 @@ export interface SessionRecord {
   appId?: string
   apiKeyId?: string
   accountId?: string // Account that owns the API key used for this session
-  colo?: string // Cloudflare datacenter code (e.g., 'AMS', 'FRA', 'SFO')
+  colo?: string // Client edge datacenter code (e.g., 'AMS', 'FRA', 'SFO')
+  doColo?: string // DO's actual location (detected via cdn-cgi/trace)
   lat?: number // Latitude (for non-CF deployments or explicit location)
   lon?: number // Longitude (for non-CF deployments or explicit location)
   region?: string // Region label (e.g., 'US-West (San Francisco)')
