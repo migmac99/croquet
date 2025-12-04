@@ -538,10 +538,7 @@ export class Synchronizer extends DurableObject<Env> {
     // This is fire-and-forget - don't block the JOIN response
     const activeCount = this.ctx.getWebSockets().filter((s) => (s.deserializeAttachment() as WSAttachment)?.active).length
     if (isEffectivelyFirstClient) this.registerSession(activeCount || 1, args.appId as string | undefined)
-    else if (this.registeredWithRegistry) {
-      // Update client count when additional clients join
-      this.updateClientCount(activeCount + 1) // +1 because this client just became active
-    }
+    else if (this.registeredWithRegistry) this.updateClientCount(activeCount + 1) // Update client count when additional clients join, +1 because this client just became active
 
     // Debug: log session state for troubleshooting
     console.log(
@@ -758,11 +755,7 @@ export class Synchronizer extends DurableObject<Env> {
     console.log(`[${this.sessionId}] SEND: time=${time}, seq=${this.state.seq}, payload=${JSON.stringify(message[2]).slice(0, 100)}`)
 
     // Broadcast RECV to all clients (official format)
-    const recvMsg = {
-      id: this.sessionId,
-      action: 'RECV',
-      args: message,
-    }
+    const recvMsg = { id: this.sessionId, action: 'RECV', args: message }
     this.broadcast(JSON.stringify(recvMsg))
 
     // Buffer message for late-joiner catchup (matches original: island.messages.push(message))
@@ -793,10 +786,7 @@ export class Synchronizer extends DurableObject<Env> {
       ;(args as Record<string, unknown>).rawTime = getRawTime(this.state)
     }
 
-    const pongMsg = {
-      action: 'PONG',
-      args,
-    }
+    const pongMsg = { action: 'PONG', args }
     ws.send(JSON.stringify(pongMsg))
   }
 
@@ -1137,11 +1127,8 @@ export class Synchronizer extends DurableObject<Env> {
     // Important: Do NOT update this.state.persistentUrl - it's only for future sessions
     this.storePersistentUrl(appId, persistentId, url)
       .then((success) => {
-        if (success) {
-          console.log(`[${this.sessionId}] [${attachment.clientId}] Persistent data stored successfully`)
-        } else {
-          console.error(`[${this.sessionId}] [${attachment.clientId}] Failed to store persistent data`)
-        }
+        if (success) console.log(`[${this.sessionId}] [${attachment.clientId}] Persistent data stored successfully`)
+        else console.error(`[${this.sessionId}] [${attachment.clientId}] Failed to store persistent data`)
       })
       .catch((err) => {
         console.error(`[${this.sessionId}] [${attachment.clientId}] Error storing persistent data:`, err)
@@ -1298,16 +1285,12 @@ export class Synchronizer extends DurableObject<Env> {
       let response: Response
 
       // Option 1: Use registry service binding (production)
-      if (this.env.REGISTRY) {
-        response = await this.env.REGISTRY.fetch(new Request(`https://registry/persist?${params}`, { method: 'GET' }))
-      }
+      if (this.env.REGISTRY) response = await this.env.REGISTRY.fetch(new Request(`https://registry/persist?${params}`, { method: 'GET' }))
       // Option 2: HTTP call to registry URL (local dev)
       else if (this.env.REGISTRY_URL) {
         const registryUrl = this.env.REGISTRY_URL.replace(/^ws/, 'http')
         response = await fetch(`${registryUrl}/persist?${params}`)
-      } else {
-        return null // No registry available
-      }
+      } else return null // No registry available
 
       if (response.status === 404) return null // Not found
       if (!response.ok) {
@@ -1338,16 +1321,12 @@ export class Synchronizer extends DurableObject<Env> {
       let response: Response
 
       // Option 1: Use registry service binding (production)
-      if (this.env.REGISTRY) {
-        response = await this.env.REGISTRY.fetch(new Request('https://registry/persist', requestInit))
-      }
+      if (this.env.REGISTRY) response = await this.env.REGISTRY.fetch(new Request('https://registry/persist', requestInit))
       // Option 2: HTTP call to registry URL (local dev)
       else if (this.env.REGISTRY_URL) {
         const registryUrl = this.env.REGISTRY_URL.replace(/^ws/, 'http')
         response = await fetch(`${registryUrl}/persist`, requestInit)
-      } else {
-        return false // No registry available
-      }
+      } else return false // No registry available
 
       if (!response.ok) {
         console.error(`[${this.sessionId}] Persistent data store failed: ${response.status}`)

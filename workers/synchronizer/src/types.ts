@@ -90,7 +90,23 @@ export interface SnapshotMeta {
 }
 
 // Message types matching Croquet protocol
-export type MessageType = 'JOIN' | 'SYNC' | 'SEND' | 'RECV' | 'TICK' | 'TICKS' | 'PING' | 'PONG' | 'SNAP' | 'REQU' | 'USERS' | 'PULSE' | 'TUTTI' | 'LOG' | 'INFO' | 'SAVE'
+export type MessageType =
+  | 'JOIN'
+  | 'SYNC'
+  | 'SEND'
+  | 'RECV'
+  | 'TICK'
+  | 'TICKS'
+  | 'PING'
+  | 'PONG'
+  | 'SNAP'
+  | 'REQU'
+  | 'USERS'
+  | 'PULSE'
+  | 'TUTTI'
+  | 'LOG'
+  | 'INFO'
+  | 'SAVE'
 
 // Prometheus-compatible metrics (matches original reflector buckets)
 // Latency histogram buckets in milliseconds
