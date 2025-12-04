@@ -196,11 +196,12 @@ export class Synchronizer extends DurableObject<Env> {
     }
 
     // Capture Cloudflare colo (datacenter code like 'AMS', 'FRA', 'SFO')
+    // The colo is passed via X-CF-Colo header from the main Worker (request.cf isn't available in DOs)
     if (!this.colo) {
-      const cf = request.cf as { colo?: string } | undefined
-      if (cf?.colo) {
-        this.colo = cf.colo
-        await this.ctx.storage.put('colo', cf.colo)
+      const colo = request.headers.get('X-CF-Colo')
+      if (colo) {
+        this.colo = colo
+        await this.ctx.storage.put('colo', colo)
       }
     }
 
@@ -1353,6 +1354,10 @@ export class Synchronizer extends DurableObject<Env> {
       appId,
       synchronizerUrl: this.env.CLUSTER_LABEL || 'synq',
       colo: this.colo, // Cloudflare datacenter code (e.g., 'AMS', 'FRA', 'SFO')
+      // For non-CF deployments, use env-based location
+      lat: this.env.SYNC_LAT ? parseFloat(this.env.SYNC_LAT) : undefined,
+      lon: this.env.SYNC_LON ? parseFloat(this.env.SYNC_LON) : undefined,
+      region: this.env.SYNC_REGION,
     })
 
     if (success) {
@@ -1391,6 +1396,7 @@ export class Synchronizer extends DurableObject<Env> {
     const success = await this.callRegistry('/register', {
       sessionId: this.sessionId,
       clientCount,
+      colo: this.colo, // Include colo in case it wasn't sent in initial registration
       metrics: this.metrics,
     })
     if (success) this.lastRegistryHeartbeat = Date.now()

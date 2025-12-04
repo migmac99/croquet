@@ -248,6 +248,8 @@ export function renderSessionsPage(
     apiKeyId?: string
     accountId?: string
     accountName?: string
+    colo?: string
+    region?: string
   }>,
   accounts: Array<{ id: string; name: string }>,
   user: string,
@@ -271,6 +273,10 @@ export function renderSessionsPage(
       <div class="flex items-center justify-between text-sm">
         <span class="text-muted-foreground">Clients</span>
         <span class="font-semibold">${s.clientCount}</span>
+      </div>
+      <div class="flex items-center justify-between text-xs text-muted-foreground">
+        <span>Location</span>
+        <span>${s.region || s.colo || '—'}</span>
       </div>
       <div class="flex items-center justify-between text-xs text-muted-foreground">
         <span>Last activity</span>
@@ -305,6 +311,9 @@ export function renderSessionsPage(
         <span class="text-lg font-semibold">${s.clientCount}</span>
       </td>
       <td class="px-6 py-5 text-sm text-muted-foreground whitespace-nowrap">
+        ${s.region || s.colo || '—'}
+      </td>
+      <td class="px-6 py-5 text-sm text-muted-foreground whitespace-nowrap">
         ${new Date(s.createdAt).toLocaleString()}
       </td>
       <td class="px-6 py-5 text-sm text-muted-foreground whitespace-nowrap">
@@ -317,7 +326,7 @@ export function renderSessionsPage(
   `
           )
           .join('')
-      : '<tr><td colspan="7" class="p-10 text-center text-muted-foreground">No active sessions</td></tr>'
+      : '<tr><td colspan="8" class="p-10 text-center text-muted-foreground">No active sessions</td></tr>'
 
   // Generate account options for the filter dropdown
   const accountOptions = accounts.map((a) => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)}</option>`).join('')

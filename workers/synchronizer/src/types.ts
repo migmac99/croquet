@@ -19,6 +19,11 @@ export interface Env {
   // Fallback: Registry URL for HTTP calls (when service binding not available)
   REGISTRY_URL?: string
 
+  // Location (for non-CF deployments where request.cf.colo is unavailable)
+  SYNC_LAT?: string // Latitude coordinate (e.g., "37.7749")
+  SYNC_LON?: string // Longitude coordinate (e.g., "-122.4194")
+  SYNC_REGION?: string // Region label (e.g., "US-West (San Francisco)")
+
   // Secrets
   JWT_SECRET?: string
 }

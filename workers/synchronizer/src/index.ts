@@ -67,10 +67,17 @@ export default {
       const id = env.SYNCHRONIZER.idFromName(sessionId)
       const stub = env.SYNCHRONIZER.get(id)
 
-      // Forward to DO with session name in header (DO internal ID differs from name)
+      // Capture colo from request.cf (only available in main Worker, not in DO)
+      const cf = request.cf as { colo?: string } | undefined
+      const colo = cf?.colo
+
+      // Forward to DO with session name and colo in headers (DO internal ID differs from name)
+      const headers = new Headers([...request.headers.entries(), ['X-Session-Name', sessionId]])
+      if (colo) headers.set('X-CF-Colo', colo)
+
       const forwardRequest = new Request(request.url, {
         method: request.method,
-        headers: new Headers([...request.headers.entries(), ['X-Session-Name', sessionId]]),
+        headers,
         body: request.body,
       })
       return stub.fetch(forwardRequest)

@@ -1535,8 +1535,8 @@ async function getMapUI(env: Env, user: AuthenticatedUser): Promise<Response> {
         if (!existing.colo && session.colo) existing.colo = session.colo
       } else {
         const label = syncUrl.replace(/^wss?:\/\//, '').replace(/\/$/, '')
-        // Look up location from session's colo (Cloudflare datacenter code)
-        const location = session.colo ? COLO_LOCATIONS[session.colo] : undefined
+        // Use explicit lat/lon from session if available, otherwise look up from colo
+        const coloLocation = session.colo ? COLO_LOCATIONS[session.colo] : undefined
         synchronizers.set(syncUrl, {
           url: syncUrl,
           label,
@@ -1544,9 +1544,9 @@ async function getMapUI(env: Env, user: AuthenticatedUser): Promise<Response> {
           clientCount: session.clientCount || 0,
           lastSeen: session.lastSeen,
           colo: session.colo,
-          region: location?.region || session.colo || env.CLUSTER_LABEL,
-          lat: location?.lat,
-          lon: location?.lon,
+          region: session.region || coloLocation?.region || session.colo || env.CLUSTER_LABEL,
+          lat: session.lat ?? coloLocation?.lat,
+          lon: session.lon ?? coloLocation?.lon,
         })
       }
     }
