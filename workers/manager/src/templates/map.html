@@ -240,20 +240,26 @@
     z-index: 40 !important;
   }
 
-  /* Dark theme popup styling */
+  /* Dark theme popup styling - solid background for readability */
   .leaflet-popup-content-wrapper {
-    background: hsl(var(--card));
-    color: hsl(var(--card-foreground));
+    background: #1c1c1c !important;
+    color: #e5e5e5 !important;
     border-radius: 0.5rem;
-    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+    border: 1px solid #333;
   }
 
   .leaflet-popup-tip {
-    background: hsl(var(--card));
+    background: #1c1c1c !important;
+    border-top: 1px solid #333;
   }
 
   .leaflet-popup-content {
     margin: 0;
+  }
+
+  .leaflet-popup-content .text-gray-500 {
+    color: #9ca3af !important;
   }
 
   /* Map controls dark styling */
