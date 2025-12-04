@@ -16,7 +16,8 @@
  * Admin operations are handled by the Manager worker (synqmanager)
  */
 
-import type { Env, SessionRecord, DispatchResponse, ApiKeyRecord, ApiKeyValidation } from './types'
+import type { Env, SessionRecord, DispatchResponse, ApiKeyRecord, ApiKeyValidation, SessionMetrics } from './types'
+import { LATENCY_BUCKETS } from './types'
 import { corsHeaders, handleCors, jsonResponse, errorResponse, isOriginAllowed, getOrigin } from '@croquet/worker-shared'
 
 export default {
@@ -54,6 +55,9 @@ export default {
         case '/health':
         case '/healthz':
           return handleHealth(env)
+
+        case '/metrics':
+          return handleMetrics(env)
 
         default:
           return new Response(`Croquet Registry\nCluster: ${env.CLUSTER_LABEL}\nSynchronizer: ${env.SYNCHRONIZER_URL}\n`, {
@@ -195,6 +199,7 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
     appId?: string
     synchronizerUrl?: string
     colo?: string
+    metrics?: SessionMetrics
   }>()
 
   if (!body.sessionId) return Response.json({ error: 'Missing sessionId' }, { status: 400, headers: corsHeaders() })
@@ -211,6 +216,7 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
     apiKeyId: existing?.apiKeyId,
     accountId: existing?.accountId,
     colo: body.colo || existing?.colo,
+    metrics: body.metrics || existing?.metrics,
   }
 
   const ttl = Number(env.SESSION_TTL_SECONDS) || 3600
@@ -427,6 +433,89 @@ async function handleHealth(env: Env): Promise<Response> {
     },
     { headers: corsHeaders() }
   )
+}
+
+/**
+ * Handle /metrics - Prometheus format metrics endpoint
+ * Aggregates metrics from all active sessions (matches original reflector)
+ */
+async function handleMetrics(env: Env): Promise<Response> {
+  // List all sessions and aggregate metrics
+  const list = await env.SESSIONS.list({ limit: 1000 })
+
+  // Aggregated metrics
+  let totalConnections = 0
+  let totalSessions = 0
+  let totalMessages = 0
+  let totalTicks = 0
+  const latencyBuckets = new Array(LATENCY_BUCKETS.length).fill(0)
+  let latencySum = 0
+  let latencyCount = 0
+
+  for (const key of list.keys) {
+    const record = await env.SESSIONS.get<SessionRecord>(key.name, 'json')
+    if (!record) continue
+
+    totalSessions++
+    totalConnections += record.clientCount || 0
+
+    if (record.metrics) {
+      totalMessages += record.metrics.messagesTotal || 0
+      totalTicks += record.metrics.ticksTotal || 0
+      latencySum += record.metrics.latencySum || 0
+      latencyCount += record.metrics.latencyCount || 0
+
+      // Aggregate histogram buckets
+      if (record.metrics.latencyBuckets) {
+        for (let i = 0; i < LATENCY_BUCKETS.length; i++) {
+          latencyBuckets[i] += record.metrics.latencyBuckets[i] || 0
+        }
+      }
+    }
+  }
+
+  // Build Prometheus format output (matches original reflector metric names)
+  const lines: string[] = []
+
+  // Gauges
+  lines.push('# HELP reflector_connections The number of client connections to the synchronizer.')
+  lines.push('# TYPE reflector_connections gauge')
+  lines.push(`reflector_connections ${totalConnections}`)
+  lines.push('')
+
+  lines.push('# HELP reflector_sessions The number of concurrent sessions on synchronizer.')
+  lines.push('# TYPE reflector_sessions gauge')
+  lines.push(`reflector_sessions ${totalSessions}`)
+  lines.push('')
+
+  // Counters
+  lines.push('# HELP reflector_messages The number of messages received.')
+  lines.push('# TYPE reflector_messages counter')
+  lines.push(`reflector_messages ${totalMessages}`)
+  lines.push('')
+
+  lines.push('# HELP reflector_ticks The number of ticks generated.')
+  lines.push('# TYPE reflector_ticks counter')
+  lines.push(`reflector_ticks ${totalTicks}`)
+  lines.push('')
+
+  // Histogram
+  lines.push('# HELP reflector_latency Latency measurements in milliseconds.')
+  lines.push('# TYPE reflector_latency histogram')
+  for (let i = 0; i < LATENCY_BUCKETS.length; i++) {
+    lines.push(`reflector_latency_bucket{le="${LATENCY_BUCKETS[i]}"} ${latencyBuckets[i]}`)
+  }
+  lines.push(`reflector_latency_bucket{le="+Inf"} ${latencyCount}`)
+  lines.push(`reflector_latency_sum ${latencySum}`)
+  lines.push(`reflector_latency_count ${latencyCount}`)
+  lines.push('')
+
+  return new Response(lines.join('\n'), {
+    headers: {
+      'Content-Type': 'text/plain; version=0.0.4; charset=utf-8',
+      ...corsHeaders(),
+    },
+  })
 }
 
 /**

@@ -10,6 +10,17 @@ export interface Env {
   REQUIRE_API_KEY: string
 }
 
+// Prometheus-compatible metrics from synchronizer (matches original reflector)
+export const LATENCY_BUCKETS = [8, 10, 13, 17, 22, 29, 38, 50, 66, 87, 115, 153, 203, 270, 360] as const
+
+export interface SessionMetrics {
+  messagesTotal: number
+  ticksTotal: number
+  latencyBuckets: number[]
+  latencySum: number
+  latencyCount: number
+}
+
 export interface SessionRecord {
   sessionId: string
   synchronizerUrl: string
@@ -20,6 +31,7 @@ export interface SessionRecord {
   apiKeyId?: string
   accountId?: string // Account that owns the API key used for this session
   colo?: string // Cloudflare datacenter code (e.g., 'AMS', 'FRA', 'SFO')
+  metrics?: SessionMetrics // Prometheus-compatible metrics
 }
 
 export interface DispatchResponse {

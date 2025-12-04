@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers'
-import { CLOSE_REASONS, type Env, type SessionState } from './types'
+import { CLOSE_REASONS, type Env, type SessionState, type SessionMetrics, createEmptyMetrics, recordLatency } from './types'
 import { SnapshotStorage } from './storage'
 
 const DEFAULT_TICK_MS = 200 // 5 ticks per second (matches original reflector TICK_MS = 1000/5)
@@ -125,6 +125,7 @@ export class Synchronizer extends DurableObject<Env> {
   private registeredWithRegistry = false // Track if we've registered with the registry
   private lastRegistryHeartbeat = 0 // Track last heartbeat to registry
   private colo: string | null = null // Cloudflare datacenter code (e.g., 'SFO', 'AMS', 'FRA')
+  private metrics: SessionMetrics = createEmptyMetrics() // Prometheus-compatible metrics (matches original reflector)
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
@@ -745,12 +746,15 @@ export class Synchronizer extends DurableObject<Env> {
     this.state.messages.push(message)
     this.state.lastMsgTime = time
 
+    // Track message count (matches original reflector prometheusMessagesCounter)
+    this.metrics.messagesTotal++
+
     // Record latency (matches original reflector: args[args.length - 1] is latency)
     // The original client sends latency in the last element of the message args
     const latency = args[args.length - 1]
 
-    // Log latency for monitoring (original reflector uses prometheus histogram)
-    if (typeof latency === 'number' && latency > 0 && latency < 60000) console.log(`[${this.sessionId}] Message latency: ${latency}ms`)
+    // Record latency in histogram (matches original reflector prometheusLatencyHistogram)
+    if (typeof latency === 'number' && latency > 0 && latency < 60000) recordLatency(this.metrics, latency)
 
     // Persist state (debounced via write coalescing)
     this.ctx.storage.put('state', this.state)
@@ -1158,6 +1162,9 @@ export class Synchronizer extends DurableObject<Env> {
       const tickMsg = { id: this.sessionId, action: 'TICK', args: tickTime }
       this.broadcast(JSON.stringify(tickMsg))
 
+      // Track tick count (matches original reflector prometheusTicksCounter)
+      this.metrics.ticksTotal++
+
       // Persist state periodically
       if (this.state.seq % 100 === 0) await this.ctx.storage.put('state', this.state)
     }
@@ -1285,7 +1292,12 @@ export class Synchronizer extends DurableObject<Env> {
 
     if (timeSinceLastHeartbeat < HEARTBEAT_INTERVAL_MS) return
 
-    const success = await this.callRegistry('/register', { sessionId: this.sessionId, clientCount })
+    // Include metrics in heartbeat (matches original reflector Prometheus metrics)
+    const success = await this.callRegistry('/register', {
+      sessionId: this.sessionId,
+      clientCount,
+      metrics: this.metrics,
+    })
     if (success) this.lastRegistryHeartbeat = Date.now()
   }
 
