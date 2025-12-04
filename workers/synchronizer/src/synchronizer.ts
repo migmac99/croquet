@@ -353,6 +353,8 @@ export class Synchronizer extends DurableObject<Env> {
     const tove = args.tove as string | undefined
     const flags = args.flags as Record<string, unknown> | undefined
     const ticks = args.ticks as { tick?: number; delay?: number } | undefined
+    const appId = args.appId as string | undefined
+    const persistentId = args.persistentId as string | undefined
 
     // Check if this is effectively the first client:
     // - No state exists (never had a session), OR
@@ -385,6 +387,8 @@ export class Synchronizer extends DurableObject<Env> {
         lastTick: 0,
         lastMsgTime: 0,
         messages: [], // Buffered messages for late-joiner catchup
+        appId, // Store appId for persistent data (matches original reflector)
+        persistentId, // Store persistentId for persistent data (matches original reflector)
       }
       await this.ctx.storage.put('state', this.state)
       if (this.env.SNAPSHOTS) this.storage = new SnapshotStorage(this.env.SNAPSHOTS, this.sessionId)
@@ -414,6 +418,20 @@ export class Synchronizer extends DurableObject<Env> {
 
     // Build snapshot URL if we have one (empty string if none, matching reflector behavior)
     const snapshotUrl = snapshot ? `data:application/octet-stream;base64,${this.arrayBufferToBase64(snapshot)}` : ''
+
+    // If no snapshot and persistentId provided, lookup persistent URL from registry
+    // Note: persistentUrl is set ONCE at session start, never updated by SAVE (matches original reflector)
+    if (!snapshot && this.state.persistentId && this.state.appId && !this.state.persistentUrl) {
+      try {
+        const persistedData = await this.lookupPersistentUrl(this.state.appId, this.state.persistentId)
+        if (persistedData) {
+          this.state.persistentUrl = persistedData
+          console.log(`[${this.sessionId}] Loaded persistent data URL: ${persistedData}`)
+        }
+      } catch (err) {
+        console.error(`[${this.sessionId}] Failed to lookup persistent data:`, err)
+      }
+    }
 
     // Without a snapshot, client must initialize fresh
     // With a snapshot, client loads snapshot and replays messages
@@ -482,6 +500,11 @@ export class Synchronizer extends DurableObject<Env> {
     if (snapshotUrl) {
       syncArgs.snapshotTime = snapshotTime
       syncArgs.snapshotSeq = snapshotSeq
+    }
+    // If no snapshot but persistentUrl exists, use it (matches original reflector)
+    else if (this.state.persistentUrl) {
+      syncArgs.url = this.state.persistentUrl
+      syncArgs.persisted = true
     }
 
     const syncResponse = {
@@ -1087,6 +1110,9 @@ export class Synchronizer extends DurableObject<Env> {
   /**
    * Handle SAVE - client uploaded persistent data
    * Matches original reflector SAVE behavior
+   *
+   * Important: SAVE stores the URL for FUTURE sessions, NOT the current session.
+   * The current session's persistentUrl is set once at join time and never updated.
    */
   private handleSave(attachment: WSAttachment, args: { persistTime: number; url: string; dissident?: unknown }): void {
     const { persistTime, url, dissident } = args
@@ -1097,12 +1123,29 @@ export class Synchronizer extends DurableObject<Env> {
       return
     }
 
-    // Log the persistent data save
-    console.log(`[${this.sessionId}] [${attachment.clientId}] Persistent data saved @${persistTime}: ${url}`)
+    // Validate that we have appId and persistentId (matches original reflector)
+    const { appId, persistentId } = this.state || {}
+    if (!appId || !persistentId) {
+      console.warn(`[${this.sessionId}] [${attachment.clientId}] SAVE rejected - missing appId or persistentId`)
+      return
+    }
 
-    // Note: Full persistent data storage would require integration with registry
-    // to store the URL associated with appId/persistentId for future sessions.
-    // For now, we acknowledge the save but don't persist it externally.
+    // Log the persistent data save
+    console.log(`[${this.sessionId}] [${attachment.clientId}] Persistent data @${persistTime}: ${url}`)
+
+    // Store the URL via registry for FUTURE sessions (fire-and-forget)
+    // Important: Do NOT update this.state.persistentUrl - it's only for future sessions
+    this.storePersistentUrl(appId, persistentId, url)
+      .then((success) => {
+        if (success) {
+          console.log(`[${this.sessionId}] [${attachment.clientId}] Persistent data stored successfully`)
+        } else {
+          console.error(`[${this.sessionId}] [${attachment.clientId}] Failed to store persistent data`)
+        }
+      })
+      .catch((err) => {
+        console.error(`[${this.sessionId}] [${attachment.clientId}] Error storing persistent data:`, err)
+      })
   }
 
   /**
@@ -1241,6 +1284,79 @@ export class Synchronizer extends DurableObject<Env> {
       return true
     } catch (err) {
       console.error(`[${this.sessionId}] Registry ${endpoint} error:`, err)
+      return false
+    }
+  }
+
+  /**
+   * Lookup persistent data URL from registry
+   * Called on JOIN when persistentId is provided but no snapshot exists
+   */
+  private async lookupPersistentUrl(appId: string, persistentId: string): Promise<string | null> {
+    try {
+      const params = new URLSearchParams({ appId, persistentId })
+      let response: Response
+
+      // Option 1: Use registry service binding (production)
+      if (this.env.REGISTRY) {
+        response = await this.env.REGISTRY.fetch(new Request(`https://registry/persist?${params}`, { method: 'GET' }))
+      }
+      // Option 2: HTTP call to registry URL (local dev)
+      else if (this.env.REGISTRY_URL) {
+        const registryUrl = this.env.REGISTRY_URL.replace(/^ws/, 'http')
+        response = await fetch(`${registryUrl}/persist?${params}`)
+      } else {
+        return null // No registry available
+      }
+
+      if (response.status === 404) return null // Not found
+      if (!response.ok) {
+        console.error(`[${this.sessionId}] Persistent data lookup failed: ${response.status}`)
+        return null
+      }
+
+      const data = (await response.json()) as { url?: string }
+      return data.url || null
+    } catch (err) {
+      console.error(`[${this.sessionId}] Persistent data lookup error:`, err)
+      return null
+    }
+  }
+
+  /**
+   * Store persistent data URL to registry
+   * Called on SAVE to persist URL for future sessions
+   */
+  private async storePersistentUrl(appId: string, persistentId: string, url: string): Promise<boolean> {
+    try {
+      const requestInit: RequestInit = {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appId, persistentId, url }),
+      }
+
+      let response: Response
+
+      // Option 1: Use registry service binding (production)
+      if (this.env.REGISTRY) {
+        response = await this.env.REGISTRY.fetch(new Request('https://registry/persist', requestInit))
+      }
+      // Option 2: HTTP call to registry URL (local dev)
+      else if (this.env.REGISTRY_URL) {
+        const registryUrl = this.env.REGISTRY_URL.replace(/^ws/, 'http')
+        response = await fetch(`${registryUrl}/persist`, requestInit)
+      } else {
+        return false // No registry available
+      }
+
+      if (!response.ok) {
+        console.error(`[${this.sessionId}] Persistent data store failed: ${response.status}`)
+        return false
+      }
+
+      return true
+    } catch (err) {
+      console.error(`[${this.sessionId}] Persistent data store error:`, err)
       return false
     }
   }

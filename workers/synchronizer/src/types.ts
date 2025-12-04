@@ -74,6 +74,10 @@ export interface SessionState {
   completedTallies?: Record<string, number>
   // Tag records for message debouncing (matches original reflector island.tagRecords)
   tagRecords?: Record<string, number>
+  // Persistent data support (matches original reflector)
+  appId?: string // Application ID from JOIN args
+  persistentId?: string // Persistent data ID from JOIN args
+  persistentUrl?: string // URL of persistent data (set once at session start, NOT updated by SAVE)
 }
 
 // Snapshot metadata

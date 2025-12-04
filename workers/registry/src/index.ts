@@ -12,6 +12,9 @@
  *   POST /unregister                         → Synchronizer unregisters session
  *   GET  /sessions                           → List active sessions
  *   GET  /health                             → Health check
+ *   GET  /metrics                            → Prometheus-compatible metrics
+ *   GET  /persist?appId={}&persistentId={}   → Lookup persistent data URL
+ *   POST /persist { appId, persistentId, url } → Store persistent data URL
  *
  * Admin operations are handled by the Manager worker (synqmanager)
  */
@@ -58,6 +61,9 @@ export default {
 
         case '/metrics':
           return handleMetrics(env)
+
+        case '/persist':
+          return handlePersist(request, env)
 
         default:
           return new Response(`Croquet Registry\nCluster: ${env.CLUSTER_LABEL}\nSynchronizer: ${env.SYNCHRONIZER_URL}\n`, {
@@ -516,6 +522,63 @@ async function handleMetrics(env: Env): Promise<Response> {
       ...corsHeaders(),
     },
   })
+}
+
+// ============================================================================
+// Persistent Data Storage
+// ============================================================================
+
+/**
+ * Handle /persist - Store and retrieve persistent data URLs
+ * Matches original reflector's persistent data behavior
+ *
+ * GET /persist?appId={appId}&persistentId={persistentId}
+ *   → Returns { url } or 404 if not found
+ *
+ * POST /persist { appId, persistentId, url }
+ *   → Stores the URL for future sessions
+ *
+ * Storage key format: persist:{appId}:{persistentId}
+ */
+async function handlePersist(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url)
+
+  if (request.method === 'GET') {
+    // Retrieve persistent data URL
+    const appId = url.searchParams.get('appId')
+    const persistentId = url.searchParams.get('persistentId')
+
+    if (!appId || !persistentId) {
+      return errorResponse('Missing appId or persistentId', 400)
+    }
+
+    const key = `persist:${appId}:${persistentId}`
+    const stored = await env.SESSIONS.get<{ url: string }>(key, 'json')
+
+    if (!stored) {
+      return new Response(null, { status: 404, headers: corsHeaders() })
+    }
+
+    return jsonResponse({ url: stored.url })
+  }
+
+  if (request.method === 'POST') {
+    // Store persistent data URL
+    const body = (await request.json()) as { appId?: string; persistentId?: string; url?: string }
+    const { appId, persistentId, url: persistentUrl } = body
+
+    if (!appId || !persistentId || !persistentUrl) {
+      return errorResponse('Missing appId, persistentId, or url', 400)
+    }
+
+    const key = `persist:${appId}:${persistentId}`
+    await env.SESSIONS.put(key, JSON.stringify({ url: persistentUrl, updatedAt: Date.now() }))
+
+    console.log(`[registry] Stored persistent data: ${key} → ${persistentUrl}`)
+    return jsonResponse({ success: true })
+  }
+
+  return errorResponse('Method not allowed', 405)
 }
 
 /**
