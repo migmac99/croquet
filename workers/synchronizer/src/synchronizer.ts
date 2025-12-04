@@ -1,13 +1,20 @@
 import { DurableObject } from 'cloudflare:workers'
-import type { Env, SessionState } from './types'
+import { CLOSE_REASONS, type Env, type SessionState } from './types'
 import { SnapshotStorage } from './storage'
 
-const DEFAULT_TICK_MS = 20 // 20 ticks per second (default)
+const DEFAULT_TICK_MS = 200 // 5 ticks per second (matches original reflector TICK_MS = 1000/5)
 const SNAPSHOT_PRUNE_INTERVAL_MS = 300000 // 5 minutes
 const MAX_MESSAGES = 100000 // Max messages to retain since last snapshot (matches original)
 const REQU_SNAPSHOT = 60000 // Request snapshot if this many messages retained (matches original)
 const INITIAL_SEQ = 0xfffffff0 >>> 0 // 4294967280 - matches original reflector island.js
 const USERS_INTERVAL = 200 // Batch users events within 200ms (matches original reflector)
+const MIN_SCALE = 1 / 64 // Matches original reflector (0.015625)
+const MAX_SCALE = 64 // Matches original reflector
+const PING_THRESHOLD_MS = 35000 // Client unresponsive if no activity for this long (matches original)
+const DISCONNECT_THRESHOLD_MS = 60000 // Disconnect client if unresponsive for this long (matches original)
+const TALLY_INTERVAL = 1000 // Maximum time to wait to tally TUTTI contributions (matches original)
+const MAX_TALLY_AGE = 60000 // Don't start new tally if vote is more than this far behind (matches original)
+const MAX_COMPLETED_TALLIES = 20 // Maximum number of past tallies to remember (matches original)
 
 /** Generate a random timeline identifier for seamless rejoin support */
 function generateTimeline(): string {
@@ -25,11 +32,33 @@ function getScaledTime(state: SessionState): number {
   return sinceStart * state.scale
 }
 
-/** Advance and return current integer time for session */
-function advanceTime(state: SessionState): number {
+/** Advance and return current integer time for session (matches original reflector) */
+function advanceTime(state: SessionState, reason?: string): number {
+  const prevTime = state.time
   const scaledTime = Math.floor(getScaledTime(state))
   state.time = scaledTime
+
+  // Warn about time jumps (matches original reflector)
+  const scaledAdvance = state.time - prevTime
+  if (scaledAdvance < 0 || scaledAdvance > 60000) {
+    console.warn(`[${state.id}] Time jump detected: ${scaledAdvance}ms`, {
+      event: 'time-jump',
+      scaledAdvance,
+      prevTime,
+      newTime: state.time,
+      scaledStart: state.scaledStart,
+      scale: state.scale,
+      tick: state.tick,
+      reason,
+    })
+  }
+
   return state.time
+}
+
+/** Get raw time for session (ms since session started, matches original reflector getRawTime) */
+function getRawTime(state: SessionState): number {
+  return Math.floor(now() - state.rawStart)
 }
 
 /**
@@ -51,7 +80,7 @@ interface IncomingMessage {
   action: string
   args: unknown
   id?: string
-  tags?: string[]
+  tags?: { debounce?: number; msgID?: string } // For SEND message debouncing (matches original reflector)
 }
 
 /**
@@ -285,7 +314,7 @@ export class Synchronizer extends DurableObject<Env> {
         this.handleSend(attachment, args as unknown[], msg.tags)
         break
       case 'PING':
-        this.handlePing(ws, args as number)
+        this.handlePing(ws, args)
         break
       case 'SNAP':
         await this.handleSnap(ws, attachment, args as Record<string, unknown>)
@@ -295,6 +324,15 @@ export class Synchronizer extends DurableObject<Env> {
         break
       case 'PULSE':
         // Heartbeat - lastSeen already updated above
+        break
+      case 'TUTTI':
+        this.handleTutti(args as unknown[])
+        break
+      case 'LOG':
+        this.handleLog(attachment, args as unknown[])
+        break
+      case 'SAVE':
+        this.handleSave(attachment, args as { persistTime: number; url: string; dissident?: unknown })
         break
       default:
         console.warn(`[${this.sessionId}] Unknown action: ${action}`)
@@ -475,9 +513,8 @@ export class Synchronizer extends DurableObject<Env> {
     // Register session with registry for monitoring visibility
     // This is fire-and-forget - don't block the JOIN response
     const activeCount = this.ctx.getWebSockets().filter((s) => (s.deserializeAttachment() as WSAttachment)?.active).length
-    if (isEffectivelyFirstClient) {
-      this.registerSession(activeCount || 1, args.appId as string | undefined)
-    } else if (this.registeredWithRegistry) {
+    if (isEffectivelyFirstClient) this.registerSession(activeCount || 1, args.appId as string | undefined)
+    else if (this.registeredWithRegistry) {
       // Update client count when additional clients join
       this.updateClientCount(activeCount + 1) // +1 because this client just became active
     }
@@ -515,7 +552,7 @@ export class Synchronizer extends DurableObject<Env> {
     if (active === 0) return // No-one to receive the message
 
     // Advance time
-    const time = advanceTime(this.state)
+    const time = advanceTime(this.state, 'USERS')
 
     // For fresh session, seq starts at INITIAL_SEQ (set in handleJoin)
     // First message will be at INITIAL_SEQ+1 = 4294967281
@@ -630,8 +667,23 @@ export class Synchronizer extends DurableObject<Env> {
    * Handle SEND - broadcast event to all clients
    * Matches original reflector: advanceTime, timestamp message, buffer for SYNC catchup
    */
-  private handleSend(_attachment: WSAttachment, args: unknown[], _tags?: string[]): void {
+  private handleSend(_attachment: WSAttachment, args: unknown[], tags?: { debounce?: number; msgID?: string }): void {
     if (!this.state) return
+
+    // Debounce support (matches original reflector SEND_TAGGED)
+    // Tag pattern example: { debounce: 1000, msgID: "pollForSnapshot" }
+    if (tags?.debounce && tags.msgID) {
+      const wallClockNow = Date.now() // debounce uses wall-clock time
+      if (!this.state.tagRecords) this.state.tagRecords = {}
+      const lastSent = this.state.tagRecords[tags.msgID]
+      if (lastSent && wallClockNow - lastSent <= tags.debounce) {
+        // Suppress message - within debounce window
+        console.log(`[${this.sessionId}] Debounce suppressed: msgID=${tags.msgID}`)
+        return
+      }
+      // Record this send time
+      this.state.tagRecords[tags.msgID] = wallClockNow
+    }
 
     // Check if message buffer is full (matches original reflector)
     if (this.state.messages.length >= MAX_MESSAGES) {
@@ -663,7 +715,7 @@ export class Synchronizer extends DurableObject<Env> {
     }
 
     // Advance time (matches original reflector)
-    const time = advanceTime(this.state)
+    const time = advanceTime(this.state, 'SEND')
 
     // Increment seq (uint32 wrap)
     this.state.seq = (this.state.seq + 1) >>> 0
@@ -674,6 +726,9 @@ export class Synchronizer extends DurableObject<Env> {
     const message = args as unknown[]
     message[0] = time
     message[1] = this.state.seq
+
+    // If rawtime flag is set, overwrite last element with raw time (matches original reflector)
+    if (this.state.flags?.rawtime) message[message.length - 1] = getRawTime(this.state)
 
     // Debug: log SEND message received
     console.log(`[${this.sessionId}] SEND: time=${time}, seq=${this.state.seq}, payload=${JSON.stringify(message[2]).slice(0, 100)}`)
@@ -690,6 +745,13 @@ export class Synchronizer extends DurableObject<Env> {
     this.state.messages.push(message)
     this.state.lastMsgTime = time
 
+    // Record latency (matches original reflector: args[args.length - 1] is latency)
+    // The original client sends latency in the last element of the message args
+    const latency = args[args.length - 1]
+
+    // Log latency for monitoring (original reflector uses prometheus histogram)
+    if (typeof latency === 'number' && latency > 0 && latency < 60000) console.log(`[${this.sessionId}] Message latency: ${latency}ms`)
+
     // Persist state (debounced via write coalescing)
     this.ctx.storage.put('state', this.state)
   }
@@ -698,10 +760,15 @@ export class Synchronizer extends DurableObject<Env> {
    * Handle PING - latency measurement
    * Note: PONG does NOT include session id (matches original reflector)
    */
-  private handlePing(ws: WebSocket, timestamp: number): void {
+  private handlePing(ws: WebSocket, args: unknown): void {
+    // If rawtime flag is set and args is an object, add rawTime (matches original reflector)
+    if (this.state?.flags?.rawtime && typeof args === 'object' && args !== null) {
+      ;(args as Record<string, unknown>).rawTime = getRawTime(this.state)
+    }
+
     const pongMsg = {
       action: 'PONG',
-      args: [timestamp, Date.now()],
+      args,
     }
     ws.send(JSON.stringify(pongMsg))
   }
@@ -720,8 +787,6 @@ export class Synchronizer extends DurableObject<Env> {
 
     // Handle scale change (matches original reflector)
     if (scale !== undefined && scale > 0) {
-      const MIN_SCALE = 0.001
-      const MAX_SCALE = 1000
       const currentScaledTime = getScaledTime(this.state)
       const scaleToApply = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale))
       this.state.scale = scaleToApply
@@ -801,6 +866,242 @@ export class Synchronizer extends DurableObject<Env> {
   }
 
   /**
+   * Handle TUTTI - Byzantine voting mechanism (matches original reflector)
+   * Collects votes from all active clients, waits for timeout or quorum, broadcasts decision
+   * Args format: [sendTime, _deprecatedTuttiSeq, payload, firstMsg, wantsVote, tallyTarget, tuttiKey]
+   */
+  private handleTutti(args: unknown[]): void {
+    if (!this.state) return
+
+    // Parse args (matches original reflector format)
+    const [sendTime, , payload, firstMsg, wantsVote, tallyTarget, tuttiKey] = args as [
+      number,
+      unknown,
+      string,
+      unknown[] | undefined,
+      boolean | undefined,
+      unknown,
+      string,
+    ]
+
+    // Initialize tallies tracking if needed
+    if (!this.state.tallies) this.state.tallies = {}
+    if (!this.state.completedTallies) this.state.completedTallies = {}
+
+    let tally = this.state.tallies[tuttiKey]
+
+    if (!tally) {
+      // Either first client we've heard from, or one that missed the party entirely
+      const historyLimit = this.cleanUpCompletedTallies()
+
+      // Reject if vote is too old
+      if (sendTime < historyLimit) {
+        console.log(`[${this.sessionId}] TUTTI: rejecting old tally ${tuttiKey} (${this.state.time - sendTime}ms old)`)
+        return
+      }
+
+      // Reject if already completed
+      if (this.state.completedTallies[tuttiKey]) {
+        console.log(`[${this.sessionId}] TUTTI: rejecting vote for completed tally ${tuttiKey}`)
+        return
+      }
+
+      // Send firstMsg if present (e.g., snapshot request message)
+      if (firstMsg) {
+        const sendableMsg = [...firstMsg]
+        if (this.state.flags?.rawtime) sendableMsg.push(0) // will be overwritten with time value
+        this.sendMessage(sendableMsg)
+      }
+
+      // Create new tally
+      const clientCount = this.ctx.getWebSockets().length
+      tally = this.state.tallies[tuttiKey] = {
+        sendTime,
+        expecting: clientCount,
+        payloads: {},
+        startedAt: now(),
+        wantsVote,
+        tallyTarget,
+        firstMsg,
+      }
+    }
+
+    // Record vote (payload is a string hash, count votes per hash)
+    const payloadKey = String(payload)
+    tally.payloads[payloadKey] = (tally.payloads[payloadKey] || 0) + 1
+
+    // Check if all votes collected
+    if (--tally.expecting === 0) this.completeTally(tuttiKey)
+
+    this.ctx.storage.put('state', this.state)
+  }
+
+  /**
+   * Complete a tally and broadcast results (matches original reflector tallyComplete)
+   */
+  private completeTally(tuttiKey: string): void {
+    if (!this.state?.tallies?.[tuttiKey]) return
+
+    const tally = this.state.tallies[tuttiKey]
+    const { sendTime, expecting: missing, wantsVote, tallyTarget, payloads } = tally
+
+    if (missing > 0) console.log(`[${this.sessionId}] TUTTI ${tuttiKey}: missing ${missing} client(s) from tally`)
+
+    // Send tally result if wantsVote or multiple different payloads
+    if (wantsVote || Object.keys(payloads).length > 1) {
+      const tallyPayload = {
+        what: 'tally',
+        sendTime,
+        tally: payloads,
+        tallyTarget,
+        tuttiKey,
+        missingClients: missing,
+      }
+      const msg: unknown[] = [0, 0, tallyPayload]
+      if (this.state.flags?.rawtime) msg.push(0) // placeholder for rawtime
+      this.sendMessage(msg)
+    }
+
+    // Move to completed tallies
+    delete this.state.tallies[tuttiKey]
+    if (!this.state.completedTallies) this.state.completedTallies = {}
+    this.state.completedTallies[tuttiKey] = sendTime
+    this.cleanUpCompletedTallies()
+
+    console.log(`[${this.sessionId}] TUTTI ${tuttiKey}: tally complete with ${Object.keys(payloads).length} unique votes`)
+  }
+
+  /**
+   * Clean up old completed tallies (matches original reflector cleanUpCompletedTallies)
+   * Returns the history limit (oldest sendTime we're tracking)
+   */
+  private cleanUpCompletedTallies(): number {
+    if (!this.state) return 0
+    if (!this.state.completedTallies) this.state.completedTallies = {}
+
+    const completed = this.state.completedTallies
+    const currentTime = this.state.time
+
+    // Calculate history limit based on MAX_TALLY_AGE
+    let historyLimit = Math.max(0, currentTime - MAX_TALLY_AGE + 1)
+
+    // Get send times that are recent enough to keep
+    const sendTimesToKeep = Object.values(completed).filter((time) => time >= historyLimit)
+
+    // If too many recent tallies, cap at MAX_COMPLETED_TALLIES
+    let newSentinel: number | undefined
+    if (sendTimesToKeep.length > MAX_COMPLETED_TALLIES) {
+      sendTimesToKeep.sort((a, b) => b - a) // descending, most recent first
+      historyLimit = sendTimesToKeep[MAX_COMPLETED_TALLIES - 2] // leave room for sentinel
+      newSentinel = sendTimesToKeep[MAX_COMPLETED_TALLIES - 1]
+    }
+
+    // Remove entries older than historyLimit
+    const sentinel = completed[''] // sentinel entry has empty string key
+    Object.keys(completed).forEach((keyOrSeq) => {
+      if (completed[keyOrSeq] < historyLimit) delete completed[keyOrSeq]
+    })
+
+    // Add sentinel if needed
+    if (newSentinel !== undefined) completed[''] = newSentinel
+
+    // Return the effective history limit
+    return sentinel !== undefined ? sentinel : historyLimit
+  }
+
+  /**
+   * Check for timed-out tallies (called from alarm)
+   */
+  private checkTallyTimeouts(): void {
+    if (!this.state?.tallies) return
+
+    const currentTime = now()
+    const timedOutKeys: string[] = []
+
+    for (const [tuttiKey, tally] of Object.entries(this.state.tallies)) {
+      if (currentTime - tally.startedAt >= TALLY_INTERVAL) timedOutKeys.push(tuttiKey)
+    }
+
+    for (const tuttiKey of timedOutKeys) {
+      console.log(`[${this.sessionId}] TUTTI ${tuttiKey}: timeout after ${TALLY_INTERVAL}ms`)
+      this.completeTally(tuttiKey)
+    }
+
+    if (timedOutKeys.length > 0) this.ctx.storage.put('state', this.state)
+  }
+
+  /**
+   * Internal helper to send a message (advances time, increments seq, broadcasts)
+   */
+  private sendMessage(messageContent: unknown[]): void {
+    if (!this.state) return
+
+    const time = advanceTime(this.state, 'TUTTI')
+    this.state.seq = (this.state.seq + 1) >>> 0
+    this.state.lastActivity = now()
+
+    const message = [...messageContent]
+    message[0] = time
+    message[1] = this.state.seq
+
+    // If rawtime flag is set, overwrite last element with raw time
+    if (this.state.flags?.rawtime && message.length > 3) message[message.length - 1] = getRawTime(this.state)
+
+    // Broadcast RECV to all clients
+    const recvMsg = { id: this.sessionId, action: 'RECV', args: message }
+    this.broadcast(JSON.stringify(recvMsg))
+
+    // Buffer for late-joiner catchup
+    this.state.messages.push(message)
+    this.state.lastMsgTime = time
+  }
+
+  /**
+   * Handle LOG - client logging (matches original reflector)
+   * Logs client messages to server console for debugging
+   */
+  private handleLog(attachment: WSAttachment, args: unknown[]): void {
+    const [level, ...logArgs] = args
+    const prefix = `[${this.sessionId}] [${attachment.clientId}]`
+
+    // Map log level to console method (matches original reflector)
+    switch (level) {
+      case 'error':
+        console.error(prefix, ...logArgs)
+        break
+      case 'warn':
+        console.warn(prefix, ...logArgs)
+        break
+      case 'info':
+        console.info(prefix, ...logArgs)
+        break
+      default:
+        console.log(prefix, ...logArgs)
+    }
+  }
+
+  /**
+   * Handle SAVE - client uploaded persistent data
+   * Matches original reflector SAVE behavior
+   */
+  private handleSave(attachment: WSAttachment, args: { persistTime: number; url: string; dissident?: unknown }): void {
+    const { persistTime, url, dissident } = args
+
+    // If dissident flag is set, this is a mismatch notification - just log it
+    if (dissident) {
+      console.log(`[${this.sessionId}] [${attachment.clientId}] Dissident persistent data @${persistTime}: ${url}`)
+      return
+    }
+
+    // Log the persistent data save
+    console.log(`[${this.sessionId}] [${attachment.clientId}] Persistent data saved @${persistTime}: ${url}`)
+
+    // Note: Full persistent data storage would require integration with registry
+    // to store the URL associated with appId/persistentId for future sessions.
+    // For now, we acknowledge the save but don't persist it externally.
+  }
+
+  /**
    * Schedule the next tick via alarm
    */
   private scheduleTick(): void {
@@ -825,16 +1126,36 @@ export class Synchronizer extends DurableObject<Env> {
       return
     }
 
+    // Check for unresponsive clients (matches original reflector)
+    const currentTime = now()
+    for (const ws of sockets) {
+      const attachment = ws.deserializeAttachment() as WSAttachment | null
+      if (!attachment) continue
+
+      const inactivity = currentTime - attachment.lastSeen
+      if (inactivity > DISCONNECT_THRESHOLD_MS) {
+        // Client unresponsive for too long - disconnect
+        console.log(`[${this.sessionId}] Disconnecting unresponsive client ${attachment.clientId} (inactive ${inactivity}ms)`)
+        ws.close(CLOSE_REASONS.UNRESPONSIVE[0], CLOSE_REASONS.UNRESPONSIVE[1])
+      } else if (inactivity > PING_THRESHOLD_MS) {
+        // Client hasn't been heard from in a while - send server-initiated PING
+        const pingMsg = { id: this.sessionId, action: 'PING', args: currentTime }
+        ws.send(JSON.stringify(pingMsg))
+      }
+    }
+
+    // Check for timed-out TUTTI tallies (matches original reflector TALLY_INTERVAL)
+    this.checkTallyTimeouts()
+
     // Tick: advance time and broadcast (official format)
     if (this.state) {
-      const time = advanceTime(this.state)
+      const time = advanceTime(this.state, 'TICK')
       this.state.lastTick = time
 
-      const tickMsg = {
-        id: this.sessionId,
-        action: 'TICK',
-        args: time,
-      }
+      // Check rawtime flag - if set, send raw monotonic time instead of scaled time
+      // (matches original reflector behavior)
+      const tickTime = this.state.flags?.rawtime ? currentTime - this.state.rawStart : time
+      const tickMsg = { id: this.sessionId, action: 'TICK', args: tickTime }
       this.broadcast(JSON.stringify(tickMsg))
 
       // Persist state periodically
@@ -845,8 +1166,7 @@ export class Synchronizer extends DurableObject<Env> {
     // Registry uses TTL on session records, so we need periodic updates
     if (this.registeredWithRegistry) this.heartbeatRegistry(sockets.length)
 
-    // Prune old snapshots periodically
-    const currentTime = now()
+    // Prune old snapshots periodically (reuse currentTime from above)
     if (this.storage && currentTime - this.lastSnapshotPrune > SNAPSHOT_PRUNE_INTERVAL_MS) {
       this.storage.prune(5).catch((err) => console.error('Snapshot prune failed:', err))
       this.lastSnapshotPrune = currentTime
