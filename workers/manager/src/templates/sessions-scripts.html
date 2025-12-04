@@ -1,32 +1,40 @@
 <script>
   async function deleteSession(id) {
-    if (!confirm('End this session? All connected clients will be disconnected.')) return
+    const confirmed = await showConfirm('End this session? All connected clients will be disconnected.', {
+      title: 'End Session',
+      confirmText: 'End Session',
+      danger: true,
+    })
+    if (!confirmed) return
 
     try {
       const res = await fetch('/sessions/' + encodeURIComponent(id), { method: 'DELETE' })
       if (!res.ok) throw new Error(await res.text())
       location.reload()
     } catch (err) {
-      alert('Error: ' + err.message)
+      showAlert('Error: ' + err.message, { title: 'Error' })
     }
   }
 
   async function purgeAllSessions() {
-    if (
-      !confirm(
-        'Purge ALL sessions? This will remove all session records from the registry. Active connections will be unaffected but will need to re-register.'
-      )
+    const confirmed = await showConfirm(
+      'Purge ALL sessions? This will remove all session records from the registry. Active connections will be unaffected but will need to re-register.',
+      {
+        title: 'Purge All Sessions',
+        confirmText: 'Purge All',
+        danger: true,
+      }
     )
-      return
+    if (!confirmed) return
 
     try {
       const res = await fetch('/sessions/purge', { method: 'POST' })
       if (!res.ok) throw new Error(await res.text())
       const data = await res.json()
-      alert(`Purged ${data.deleted} sessions`)
-      location.reload()
+      showAlert(`Purged ${data.deleted} sessions`, { title: 'Success' })
+      setTimeout(() => location.reload(), 1500)
     } catch (err) {
-      alert('Error: ' + err.message)
+      showAlert('Error: ' + err.message, { title: 'Error' })
     }
   }
 

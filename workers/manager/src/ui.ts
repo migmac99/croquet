@@ -16,6 +16,8 @@ import accountsTemplate from './templates/accounts.html'
 import accountsScripts from './templates/accounts-scripts.html'
 import synchronizersTemplate from './templates/synchronizers.html'
 import mapTemplate from './templates/map.html'
+import metricsTemplate from './templates/metrics.html'
+import storageTemplate from './templates/storage.html'
 import settingsTemplate from './templates/settings.html'
 // Import compiled Tailwind CSS (wrangler rules configured to import as text)
 import compiledStyles from './styles/output.css'
@@ -37,7 +39,7 @@ function renderPage(options: {
   title: string
   content: string
   scripts?: string
-  activePage: 'dashboard' | 'keys' | 'sessions' | 'accounts' | 'synchronizers' | 'map' | 'settings'
+  activePage: 'dashboard' | 'keys' | 'sessions' | 'accounts' | 'synchronizers' | 'map' | 'metrics' | 'storage' | 'settings'
   user: string
   cluster: string
 }): string {
@@ -58,6 +60,8 @@ function renderPage(options: {
     nav_accounts_active: options.activePage === 'accounts' ? navActive : navInactive,
     nav_synchronizers_active: options.activePage === 'synchronizers' ? navActive : navInactive,
     nav_map_active: options.activePage === 'map' ? navActive : navInactive,
+    nav_metrics_active: options.activePage === 'metrics' ? navActive : navInactive,
+    nav_storage_active: options.activePage === 'storage' ? navActive : navInactive,
     nav_settings_active: options.activePage === 'settings' ? navActive : navInactive,
   })
 }
@@ -557,6 +561,269 @@ export function renderMapPage(
     title: 'World Map',
     content,
     activePage: 'map',
+    user,
+    cluster,
+  })
+}
+
+// ============================================================================
+// Metrics Page
+// ============================================================================
+
+// Latency histogram buckets (matching original reflector)
+const LATENCY_BUCKETS = [8, 10, 13, 17, 22, 29, 38, 50, 66, 87, 115, 153, 203, 270, 360]
+
+export interface SessionMetrics {
+  messagesTotal: number
+  ticksTotal: number
+  latencyBuckets: number[]
+  latencySum: number
+  latencyCount: number
+}
+
+export function renderMetricsPage(
+  sessions: Array<{
+    sessionId: string
+    appId?: string
+    clientCount: number
+    metrics?: SessionMetrics
+  }>,
+  user: string,
+  cluster: string
+): string {
+  // Aggregate totals across all sessions
+  const totals = {
+    messagesTotal: 0,
+    ticksTotal: 0,
+    latencyBuckets: new Array(LATENCY_BUCKETS.length).fill(0),
+    latencySum: 0,
+    latencyCount: 0,
+  }
+
+  for (const session of sessions) {
+    if (session.metrics) {
+      totals.messagesTotal += session.metrics.messagesTotal
+      totals.ticksTotal += session.metrics.ticksTotal
+      totals.latencySum += session.metrics.latencySum
+      totals.latencyCount += session.metrics.latencyCount
+      for (let i = 0; i < LATENCY_BUCKETS.length; i++) {
+        totals.latencyBuckets[i] += session.metrics.latencyBuckets[i] || 0
+      }
+    }
+  }
+
+  const meanLatency = totals.latencyCount > 0 ? (totals.latencySum / totals.latencyCount).toFixed(1) + 'ms' : 'N/A'
+
+  // Generate latency histogram bars (CSS-based chart)
+  const maxBucket = Math.max(...totals.latencyBuckets, 1)
+  const latencyChart =
+    totals.latencyCount > 0
+      ? `<div class="flex items-end justify-between gap-1 h-full">
+        ${LATENCY_BUCKETS.map((bucket, i) => {
+          const height = Math.max((totals.latencyBuckets[i] / maxBucket) * 100, 2)
+          const count = totals.latencyBuckets[i]
+          return `<div class="flex-1 flex flex-col items-center gap-1">
+            <div class="w-full bg-primary/80 rounded-t transition-all hover:bg-primary" style="height: ${height}%" title="${count} requests <= ${bucket}ms"></div>
+            <span class="text-xs text-muted-foreground">${bucket}</span>
+          </div>`
+        }).join('')}
+      </div>`
+      : '<div class="flex items-center justify-center h-full text-muted-foreground">No latency data available</div>'
+
+  // Generate session cards for mobile
+  const sessionCards =
+    sessions.length > 0
+      ? sessions
+          .map((s) => {
+            const sessionMean = s.metrics && s.metrics.latencyCount > 0 ? (s.metrics.latencySum / s.metrics.latencyCount).toFixed(1) + 'ms' : 'N/A'
+            return `
+    <div class="card p-6 space-y-3">
+      <div class="flex items-start justify-between gap-3">
+        <div class="font-mono text-xs truncate flex-1 cursor-pointer hover:text-muted-foreground transition-colors" onclick="copyToClipboard('${escapeHtml(s.sessionId)}', 'Session ID')" title="Click to copy">${escapeHtml(s.sessionId.slice(0, 20))}...</div>
+        <span class="badge shrink-0">${escapeHtml(s.appId || 'Unknown')}</span>
+      </div>
+      <div class="grid grid-cols-2 gap-4 text-sm">
+        <div>
+          <span class="text-muted-foreground">Messages:</span>
+          <span class="font-semibold ml-1">${formatNumber(s.metrics?.messagesTotal || 0)}</span>
+        </div>
+        <div>
+          <span class="text-muted-foreground">Ticks:</span>
+          <span class="font-semibold ml-1">${formatNumber(s.metrics?.ticksTotal || 0)}</span>
+        </div>
+        <div>
+          <span class="text-muted-foreground">Latency:</span>
+          <span class="font-semibold ml-1">${sessionMean}</span>
+        </div>
+        <div>
+          <span class="text-muted-foreground">Clients:</span>
+          <span class="font-semibold ml-1">${s.clientCount}</span>
+        </div>
+      </div>
+    </div>`
+          })
+          .join('')
+      : '<div class="p-10 text-center text-muted-foreground">No sessions with metrics data</div>'
+
+  // Generate session rows for desktop table
+  const sessionRows =
+    sessions.length > 0
+      ? sessions
+          .map((s) => {
+            const sessionMean = s.metrics && s.metrics.latencyCount > 0 ? (s.metrics.latencySum / s.metrics.latencyCount).toFixed(1) + 'ms' : 'N/A'
+            return `
+    <tr class="border-b border-border hover:bg-secondary/30 transition-colors">
+      <td class="px-6 py-4">
+        <div class="font-mono text-sm truncate max-w-xs cursor-pointer hover:text-muted-foreground transition-colors" onclick="copyToClipboard('${escapeHtml(s.sessionId)}', 'Session ID')" title="Click to copy">${escapeHtml(s.sessionId)}</div>
+      </td>
+      <td class="px-6 py-4">
+        <span class="badge">${escapeHtml(s.appId || 'Unknown')}</span>
+      </td>
+      <td class="px-6 py-4 font-semibold">${formatNumber(s.metrics?.messagesTotal || 0)}</td>
+      <td class="px-6 py-4 font-semibold">${formatNumber(s.metrics?.ticksTotal || 0)}</td>
+      <td class="px-6 py-4 font-semibold">${sessionMean}</td>
+      <td class="px-6 py-4 font-semibold">${s.clientCount}</td>
+    </tr>`
+          })
+          .join('')
+      : '<tr><td colspan="6" class="p-10 text-center text-muted-foreground">No sessions with metrics data</td></tr>'
+
+  const content = render(metricsTemplate, {
+    total_messages: formatNumber(totals.messagesTotal),
+    total_ticks: formatNumber(totals.ticksTotal),
+    mean_latency: meanLatency,
+    active_sessions: sessions.filter((s) => s.metrics).length,
+    latency_chart: latencyChart,
+    session_count: sessions.length,
+    session_cards: sessionCards,
+    session_rows: sessionRows,
+  })
+
+  return renderPage({
+    title: 'Metrics',
+    content,
+    activePage: 'metrics',
+    user,
+    cluster,
+  })
+}
+
+function formatNumber(num: number): string {
+  if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M'
+  if (num >= 1000) return (num / 1000).toFixed(1) + 'K'
+  return num.toString()
+}
+
+// ============================================================================
+// Storage Page
+// ============================================================================
+
+interface StorageNamespace {
+  name: string
+  binding: string
+  keyCount: number
+  estimatedSize: number
+  description: string
+}
+
+interface StorageKey {
+  namespace: string
+  key: string
+  size: number
+  updatedAt?: number
+}
+
+export function renderStoragePage(namespaces: StorageNamespace[], recentKeys: StorageKey[], user: string, cluster: string): string {
+  // Calculate totals
+  const totalKeys = namespaces.reduce((sum, ns) => sum + ns.keyCount, 0)
+  const totalSize = namespaces.reduce((sum, ns) => sum + ns.estimatedSize, 0)
+
+  // Format size helper
+  const formatSize = (bytes: number): string => {
+    if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB'
+    if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(2) + ' MB'
+    if (bytes >= 1024) return (bytes / 1024).toFixed(2) + ' KB'
+    return bytes + ' B'
+  }
+
+  // Generate namespace cards for mobile
+  const namespaceCards =
+    namespaces.length > 0
+      ? namespaces
+          .map(
+            (ns) => `
+    <div class="card p-6 space-y-4">
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <div class="font-semibold">${escapeHtml(ns.name)}</div>
+          <div class="text-xs text-muted-foreground mt-1">${escapeHtml(ns.binding)}</div>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-4 text-sm">
+        <div>
+          <span class="text-muted-foreground">Keys:</span>
+          <span class="font-semibold ml-1">${formatNumber(ns.keyCount)}</span>
+        </div>
+        <div>
+          <span class="text-muted-foreground">Size:</span>
+          <span class="font-semibold ml-1">${formatSize(ns.estimatedSize)}</span>
+        </div>
+      </div>
+      <div class="text-sm text-muted-foreground">${escapeHtml(ns.description)}</div>
+    </div>`
+          )
+          .join('')
+      : '<div class="p-10 text-center text-muted-foreground">No KV namespaces configured</div>'
+
+  // Generate namespace rows for desktop table
+  const namespaceRows =
+    namespaces.length > 0
+      ? namespaces
+          .map(
+            (ns) => `
+    <tr class="border-b border-border hover:bg-secondary/30 transition-colors">
+      <td class="px-6 py-4">
+        <div class="font-semibold">${escapeHtml(ns.name)}</div>
+        <div class="text-xs text-muted-foreground">${escapeHtml(ns.binding)}</div>
+      </td>
+      <td class="px-6 py-4 font-semibold">${formatNumber(ns.keyCount)}</td>
+      <td class="px-6 py-4 font-semibold">${formatSize(ns.estimatedSize)}</td>
+      <td class="px-6 py-4 text-muted-foreground">${escapeHtml(ns.description)}</td>
+    </tr>`
+          )
+          .join('')
+      : '<tr><td colspan="4" class="p-10 text-center text-muted-foreground">No KV namespaces configured</td></tr>'
+
+  // Generate recent keys list
+  const recentKeysHtml =
+    recentKeys.length > 0
+      ? recentKeys
+          .map(
+            (k) => `
+    <div class="card p-4 flex items-center justify-between gap-4">
+      <div class="flex-1 min-w-0">
+        <div class="font-mono text-sm truncate cursor-pointer hover:text-muted-foreground transition-colors" onclick="copyToClipboard('${escapeHtml(k.key)}', 'Key')" title="Click to copy">${escapeHtml(k.key)}</div>
+        <div class="text-xs text-muted-foreground mt-1">${escapeHtml(k.namespace)}${k.updatedAt ? ' • ' + formatTimeAgo(k.updatedAt) : ''}</div>
+      </div>
+      <div class="text-sm font-semibold shrink-0">${formatSize(k.size)}</div>
+    </div>`
+          )
+          .join('')
+      : '<div class="p-10 text-center text-muted-foreground">No recent keys</div>'
+
+  const content = render(storageTemplate, {
+    total_keys: formatNumber(totalKeys),
+    total_size: formatSize(totalSize),
+    namespace_count: namespaces.length,
+    namespace_cards: namespaceCards,
+    namespace_rows: namespaceRows,
+    recent_keys: recentKeysHtml,
+  })
+
+  return renderPage({
+    title: 'Storage',
+    content,
+    activePage: 'storage',
     user,
     cluster,
   })

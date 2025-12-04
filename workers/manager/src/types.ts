@@ -6,6 +6,9 @@ export interface Env {
   SYNCHRONIZERS: KVNamespace // Registered synchronizers
   SETTINGS: KVNamespace // Global settings (feature flags, etc.)
 
+  // R2 Buckets
+  SNAPSHOTS: R2Bucket // Snapshot storage (for storage stats)
+
   // Cloudflare Access config
   ACCESS_AUD: string // Application Audience (AUD) tag from Access
 
@@ -81,6 +84,10 @@ export interface ApiKeyRecord {
   accountId?: string
 }
 
+// Re-export metrics from shared package
+export { LATENCY_BUCKETS, type SessionMetrics } from '@croquet/worker-shared'
+import type { SessionMetrics } from '@croquet/worker-shared'
+
 /**
  * Session record stored in KV
  */
@@ -94,6 +101,7 @@ export interface SessionRecord {
   apiKeyId?: string
   accountId?: string // Account that owns the API key used for this session
   colo?: string // Cloudflare datacenter code (e.g., 'AMS', 'FRA', 'SFO')
+  metrics?: SessionMetrics // Prometheus-compatible metrics
 }
 
 /**

@@ -1,3 +1,7 @@
+// Re-export metrics from shared package
+export { LATENCY_BUCKETS, type SessionMetrics } from '@croquet/worker-shared'
+import type { SessionMetrics } from '@croquet/worker-shared'
+
 export interface Env {
   // KV Namespaces
   SESSIONS: KVNamespace
@@ -8,17 +12,6 @@ export interface Env {
   CLUSTER_LABEL: string
   SESSION_TTL_SECONDS: string
   REQUIRE_API_KEY: string
-}
-
-// Prometheus-compatible metrics from synchronizer (matches original reflector)
-export const LATENCY_BUCKETS = [8, 10, 13, 17, 22, 29, 38, 50, 66, 87, 115, 153, 203, 270, 360] as const
-
-export interface SessionMetrics {
-  messagesTotal: number
-  ticksTotal: number
-  latencyBuckets: number[]
-  latencySum: number
-  latencyCount: number
 }
 
 export interface SessionRecord {

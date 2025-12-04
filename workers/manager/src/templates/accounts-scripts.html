@@ -27,7 +27,7 @@
       document.getElementById('createDialog').close()
       document.getElementById('accountCreatedDialog').showModal()
     } catch (err) {
-      alert('Error creating account: ' + err.message)
+      showAlert('Error creating account: ' + err.message, { title: 'Error' })
     }
   })
 
@@ -55,7 +55,7 @@
 
       document.getElementById('editDialog').showModal()
     } catch (err) {
-      alert('Error loading account: ' + err.message)
+      showAlert('Error loading account: ' + err.message, { title: 'Error' })
     }
   }
 
@@ -82,12 +82,17 @@
       document.getElementById('editDialog').close()
       location.reload()
     } catch (err) {
-      alert('Error updating account: ' + err.message)
+      showAlert('Error updating account: ' + err.message, { title: 'Error' })
     }
   })
 
   async function rollSecret(id) {
-    if (!confirm('Generate a new secret? The old secret will stop working immediately.')) return
+    const confirmed = await showConfirm('Generate a new secret? The old secret will stop working immediately.', {
+      title: 'Roll Secret',
+      confirmText: 'Generate New Secret',
+      danger: true,
+    })
+    if (!confirmed) return
 
     try {
       const res = await fetch('/accounts/' + id + '/roll', { method: 'POST' })
@@ -97,19 +102,24 @@
       document.getElementById('rolledSecret').textContent = result.secret
       document.getElementById('newSecretDialog').showModal()
     } catch (err) {
-      alert('Error: ' + err.message)
+      showAlert('Error: ' + err.message, { title: 'Error' })
     }
   }
 
   async function deleteAccount(id) {
-    if (!confirm('Delete this account? This will also affect any API keys associated with it. This cannot be undone.')) return
+    const confirmed = await showConfirm('Delete this account? This will also affect any API keys associated with it. This cannot be undone.', {
+      title: 'Delete Account',
+      confirmText: 'Delete',
+      danger: true,
+    })
+    if (!confirmed) return
 
     try {
       const res = await fetch('/accounts/' + id, { method: 'DELETE' })
       if (!res.ok) throw new Error(await res.text())
       location.reload()
     } catch (err) {
-      alert('Error: ' + err.message)
+      showAlert('Error: ' + err.message, { title: 'Error' })
     }
   }
 </script>

@@ -1,0 +1,137 @@
+<!-- Metrics Page Template -->
+<div class="space-y-8">
+  <!-- Header -->
+  <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <div>
+      <h2 class="text-2xl font-bold">Metrics</h2>
+      <p class="text-muted-foreground mt-1">Prometheus-compatible infrastructure metrics</p>
+    </div>
+    <div class="flex gap-3">
+      <button onclick="refreshMetrics()" class="btn btn-secondary">
+        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+          />
+        </svg>
+        Refresh
+      </button>
+      <a href="/metrics" target="_blank" class="btn btn-ghost">
+        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+          />
+        </svg>
+        Raw Prometheus
+      </a>
+    </div>
+  </div>
+
+  <!-- Summary Cards -->
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+    <div class="card p-6">
+      <div class="text-muted-foreground text-sm font-medium">Total Messages</div>
+      <div class="text-3xl font-bold mt-2" id="totalMessages">{{total_messages}}</div>
+      <div class="text-xs text-muted-foreground mt-1">SEND messages processed</div>
+    </div>
+    <div class="card p-6">
+      <div class="text-muted-foreground text-sm font-medium">Total Ticks</div>
+      <div class="text-3xl font-bold mt-2" id="totalTicks">{{total_ticks}}</div>
+      <div class="text-xs text-muted-foreground mt-1">Tick events generated</div>
+    </div>
+    <div class="card p-6">
+      <div class="text-muted-foreground text-sm font-medium">Mean Latency</div>
+      <div class="text-3xl font-bold mt-2" id="meanLatency">{{mean_latency}}</div>
+      <div class="text-xs text-muted-foreground mt-1">Average message latency</div>
+    </div>
+    <div class="card p-6">
+      <div class="text-muted-foreground text-sm font-medium">Active Sessions</div>
+      <div class="text-3xl font-bold mt-2" id="activeSessions">{{active_sessions}}</div>
+      <div class="text-xs text-muted-foreground mt-1">With metrics data</div>
+    </div>
+  </div>
+
+  <!-- Latency Distribution -->
+  <div class="card">
+    <div class="p-6 border-b border-border">
+      <h3 class="font-semibold">Latency Distribution</h3>
+      <p class="text-sm text-muted-foreground mt-1">Message processing latency histogram (milliseconds)</p>
+    </div>
+    <div class="p-6">
+      <div class="h-64" id="latencyChart">{{latency_chart}}</div>
+      <div class="flex justify-between text-xs text-muted-foreground mt-4">
+        <span>0ms</span>
+        <span>50ms</span>
+        <span>100ms</span>
+        <span>200ms</span>
+        <span>360ms+</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Per-Session Metrics Table -->
+  <div class="card">
+    <div class="p-6 border-b border-border flex items-center justify-between">
+      <div>
+        <h3 class="font-semibold">Per-Session Metrics</h3>
+        <p class="text-sm text-muted-foreground mt-1">Breakdown by active session</p>
+      </div>
+      <span class="badge" id="sessionCount">{{session_count}} sessions</span>
+    </div>
+
+    <!-- Mobile Cards -->
+    <div class="lg:hidden p-4 space-y-4">{{session_cards}}</div>
+
+    <!-- Desktop Table -->
+    <div class="hidden lg:block overflow-x-auto">
+      <table class="w-full">
+        <thead class="bg-secondary/30">
+          <tr>
+            <th class="px-6 py-4 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Session</th>
+            <th class="px-6 py-4 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">App ID</th>
+            <th class="px-6 py-4 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Messages</th>
+            <th class="px-6 py-4 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Ticks</th>
+            <th class="px-6 py-4 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Mean Latency</th>
+            <th class="px-6 py-4 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Clients</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-border">
+          {{session_rows}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+  async function refreshMetrics() {
+    try {
+      const response = await fetch('/api/metrics-data')
+      if (!response.ok) throw new Error('Failed to fetch metrics')
+      const data = await response.json()
+
+      // Update summary cards
+      document.getElementById('totalMessages').textContent = formatNumber(data.totals.messagesTotal)
+      document.getElementById('totalTicks').textContent = formatNumber(data.totals.ticksTotal)
+      document.getElementById('meanLatency').textContent = data.totals.meanLatency
+      document.getElementById('activeSessions').textContent = data.sessions.length
+      document.getElementById('sessionCount').textContent = data.sessions.length + ' sessions'
+
+      showToast('Metrics refreshed')
+    } catch (error) {
+      showToast('Failed to refresh metrics')
+      console.error('Refresh error:', error)
+    }
+  }
+
+  function formatNumber(num) {
+    if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M'
+    if (num >= 1000) return (num / 1000).toFixed(1) + 'K'
+    return num.toString()
+  }
+</script>

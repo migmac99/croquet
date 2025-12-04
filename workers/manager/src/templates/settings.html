@@ -1,12 +1,14 @@
-<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-5 mb-10 lg:mb-12">
-  <div>
-    <h2 class="text-2xl sm:text-3xl font-bold">Settings</h2>
-    <p class="text-sm sm:text-base text-muted-foreground mt-2">Configure Synq Manager behavior and features</p>
+<div class="space-y-8">
+  <!-- Header -->
+  <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-5">
+    <div>
+      <h2 class="text-2xl sm:text-3xl font-bold">Settings</h2>
+      <p class="text-sm sm:text-base text-muted-foreground mt-2">Configure Synq Manager behavior and features</p>
+    </div>
   </div>
-</div>
 
-<!-- Settings Cards -->
-<div class="flex flex-col gap-6">
+  <!-- Settings Cards -->
+  <div class="flex flex-col gap-6">
   <!-- Synchronizer Registration -->
   <div class="card p-6">
     <div class="flex items-center justify-between gap-4">
@@ -87,17 +89,18 @@
       </div>
     </div>
   </div>
-</div>
+  </div>
 
-<!-- Info Card -->
-<div class="mt-8 card p-6 border-primary/20 bg-primary/5">
-  <div class="flex gap-3">
-    <svg class="w-5 h-5 text-primary shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-    </svg>
-    <div class="text-sm text-muted-foreground">
-      <p class="font-medium text-foreground mb-1">About Settings</p>
-      <p>Settings are stored in Cloudflare KV and apply globally. Changes take effect immediately.</p>
+  <!-- Info Card -->
+  <div class="card p-6 border-primary/20 bg-primary/5">
+    <div class="flex gap-3">
+      <svg class="w-5 h-5 text-primary shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+      <div class="text-sm text-muted-foreground">
+        <p class="font-medium text-foreground mb-1">About Settings</p>
+        <p>Settings are stored in Cloudflare KV and apply globally. Changes take effect immediately.</p>
+      </div>
     </div>
   </div>
 </div>

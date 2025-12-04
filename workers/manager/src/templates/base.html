@@ -111,6 +111,28 @@
             </svg>
             World Map
           </a>
+          <a href="/ui/metrics" onclick="closeSidebar()" class="flex items-center gap-3 px-5 py-3 rounded-lg {{nav_metrics_active}} transition-colors">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
+              />
+            </svg>
+            Metrics
+          </a>
+          <a href="/ui/storage" onclick="closeSidebar()" class="flex items-center gap-3 px-5 py-3 rounded-lg {{nav_storage_active}} transition-colors">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"
+              />
+            </svg>
+            Storage
+          </a>
           <a href="/ui/settings" onclick="closeSidebar()" class="flex items-center gap-3 px-5 py-3 rounded-lg {{nav_settings_active}} transition-colors">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
@@ -155,6 +177,24 @@
     <!-- Toast container -->
     <div id="toastContainer" class="toast-container"></div>
 
+    <!-- Modal container -->
+    <div
+      id="modalOverlay"
+      class="fixed inset-0 bg-black/60 z-[100] opacity-0 invisible transition-all duration-200 flex items-center justify-center p-4"
+      onclick="if (event.target === this) closeModal()"
+    >
+      <div id="modalContent" class="card w-full max-w-md transform scale-95 opacity-0 transition-all duration-200">
+        <div class="p-6">
+          <h3 id="modalTitle" class="text-lg font-semibold mb-2">Confirm</h3>
+          <p id="modalMessage" class="text-muted-foreground"></p>
+        </div>
+        <div id="modalFooter" class="flex gap-3 p-4 border-t border-border justify-end">
+          <button id="modalCancel" class="btn btn-ghost" onclick="closeModal(false)">Cancel</button>
+          <button id="modalConfirm" class="btn btn-primary" onclick="closeModal(true)">Confirm</button>
+        </div>
+      </div>
+    </div>
+
     <script>
       function toggleSidebar() {
         const sidebar = document.getElementById('sidebar')
@@ -198,6 +238,58 @@
             showToast('Failed to copy')
           })
       }
+
+      // Modal system - replaces browser confirm/alert
+      let modalResolve = null
+
+      function showConfirm(message, options = {}) {
+        return new Promise((resolve) => {
+          modalResolve = resolve
+          const overlay = document.getElementById('modalOverlay')
+          const content = document.getElementById('modalContent')
+          const title = document.getElementById('modalTitle')
+          const msg = document.getElementById('modalMessage')
+          const cancelBtn = document.getElementById('modalCancel')
+          const confirmBtn = document.getElementById('modalConfirm')
+
+          title.textContent = options.title || 'Confirm'
+          msg.textContent = message
+          cancelBtn.textContent = options.cancelText || 'Cancel'
+          confirmBtn.textContent = options.confirmText || 'Confirm'
+          confirmBtn.className = options.danger ? 'btn btn-destructive' : 'btn btn-primary'
+          cancelBtn.style.display = options.hideCancel ? 'none' : ''
+
+          overlay.classList.remove('opacity-0', 'invisible')
+          setTimeout(() => {
+            content.classList.remove('scale-95', 'opacity-0')
+          }, 10)
+        })
+      }
+
+      function showAlert(message, options = {}) {
+        return showConfirm(message, { ...options, hideCancel: true, confirmText: options.confirmText || 'OK' })
+      }
+
+      function closeModal(result = false) {
+        const overlay = document.getElementById('modalOverlay')
+        const content = document.getElementById('modalContent')
+
+        content.classList.add('scale-95', 'opacity-0')
+        setTimeout(() => {
+          overlay.classList.add('opacity-0', 'invisible')
+          if (modalResolve) {
+            modalResolve(result)
+            modalResolve = null
+          }
+        }, 200)
+      }
+
+      // Handle escape key for modal
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && modalResolve) {
+          closeModal(false)
+        }
+      })
     </script>
     {{scripts}}
   </body>

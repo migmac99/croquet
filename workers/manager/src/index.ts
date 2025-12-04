@@ -22,7 +22,17 @@ import type {
   SettingsRecord,
   SettingKey,
 } from './types'
-import { renderDashboard, renderKeysPage, renderSessionsPage, renderAccountsPage, renderSynchronizersPage, renderMapPage, renderSettingsPage } from './ui'
+import {
+  renderDashboard,
+  renderKeysPage,
+  renderSessionsPage,
+  renderAccountsPage,
+  renderSynchronizersPage,
+  renderMapPage,
+  renderMetricsPage,
+  renderStoragePage,
+  renderSettingsPage,
+} from './ui'
 
 /**
  * Verify Bearer token auth against stored account secrets
@@ -242,6 +252,8 @@ export default {
       if (path === '/ui/accounts') return await getAccountsUI(env, user) // Accounts UI
       if (path === '/ui/synchronizers') return await getSynchronizersUI(env, user) // Synchronizers UI
       if (path === '/ui/map') return await getMapUI(env, user) // Map UI
+      if (path === '/ui/metrics') return await getMetricsUI(env, user) // Metrics UI
+      if (path === '/ui/storage') return await getStorageUI(env, user) // Storage UI
       if (path === '/ui/settings') return await getSettingsUI(env, user) // Settings UI
 
       // ========================================
@@ -266,6 +278,10 @@ export default {
       // Roll (regenerate) API key
       const rollMatch = path.match(/^\/keys\/([a-f0-9]+)\/roll$/)
       if (rollMatch && request.method === 'POST') return await rollApiKey(rollMatch[1], env, user)
+
+      // Metrics endpoints
+      if (path === '/metrics') return await getPrometheusMetrics(env) // Prometheus format
+      if (path === '/api/metrics-data') return await getMetricsData(env) // JSON for UI refresh
 
       // Sessions management
       if (path === '/sessions' || path === '/sessions/') {
@@ -1537,23 +1553,6 @@ async function getMapUI(env: Env, user: AuthenticatedUser): Promise<Response> {
     cursor = list.list_complete ? undefined : list.cursor
   } while (cursor)
 
-  // Always include the configured SYNCHRONIZER_URL, even if no sessions exist
-  const defaultSyncUrl = env.SYNCHRONIZER_URL
-  if (!synchronizers.has(defaultSyncUrl)) {
-    const label = defaultSyncUrl.replace(/^wss?:\/\//, '').replace(/\/$/, '')
-    synchronizers.set(defaultSyncUrl, {
-      url: defaultSyncUrl,
-      label,
-      sessionCount: 0,
-      clientCount: 0,
-      lastSeen: Date.now(),
-      region: env.CLUSTER_LABEL || 'Unknown Location',
-      // Antarctica for unknown locations
-      lat: -82.8628,
-      lon: 135.0,
-    })
-  }
-
   const syncList = Array.from(synchronizers.values())
 
   // For synchronizers without colo-based coordinates, place in Antarctica
@@ -1590,6 +1589,309 @@ async function getMapUI(env: Env, user: AuthenticatedUser): Promise<Response> {
   }
 
   return html(renderMapPage(geoJsonData, totals, user.email, env.CLUSTER_LABEL))
+}
+
+/**
+ * Get Metrics UI page
+ */
+async function getMetricsUI(env: Env, user: AuthenticatedUser): Promise<Response> {
+  // Fetch all sessions with their metrics from SESSIONS KV
+  const sessions: Array<{
+    sessionId: string
+    appId?: string
+    clientCount: number
+    metrics?: {
+      messagesTotal: number
+      ticksTotal: number
+      latencyBuckets: number[]
+      latencySum: number
+      latencyCount: number
+    }
+  }> = []
+
+  let cursor: string | undefined
+  do {
+    const list = await env.SESSIONS.list({ cursor, limit: 1000 })
+    for (const key of list.keys) {
+      const record = await env.SESSIONS.get<SessionRecord>(key.name, 'json')
+      if (record) {
+        sessions.push({
+          sessionId: record.sessionId,
+          appId: record.appId,
+          clientCount: record.clientCount,
+          metrics: record.metrics,
+        })
+      }
+    }
+    cursor = list.list_complete ? undefined : list.cursor
+  } while (cursor)
+
+  return html(renderMetricsPage(sessions, user.email, env.CLUSTER_LABEL))
+}
+
+/**
+ * Get Prometheus-compatible metrics (text format)
+ */
+async function getPrometheusMetrics(env: Env): Promise<Response> {
+  const LATENCY_BUCKETS = [8, 10, 13, 17, 22, 29, 38, 50, 66, 87, 115, 153, 203, 270, 360]
+
+  // Aggregate metrics from all sessions
+  const totals = {
+    messagesTotal: 0,
+    ticksTotal: 0,
+    latencyBuckets: new Array(LATENCY_BUCKETS.length).fill(0),
+    latencySum: 0,
+    latencyCount: 0,
+    sessionCount: 0,
+    clientCount: 0,
+  }
+
+  let cursor: string | undefined
+  do {
+    const list = await env.SESSIONS.list({ cursor, limit: 1000 })
+    for (const key of list.keys) {
+      const record = await env.SESSIONS.get<SessionRecord>(key.name, 'json')
+      if (record) {
+        totals.sessionCount++
+        totals.clientCount += record.clientCount || 0
+        if (record.metrics) {
+          totals.messagesTotal += record.metrics.messagesTotal
+          totals.ticksTotal += record.metrics.ticksTotal
+          totals.latencySum += record.metrics.latencySum
+          totals.latencyCount += record.metrics.latencyCount
+          for (let i = 0; i < LATENCY_BUCKETS.length; i++) {
+            totals.latencyBuckets[i] += record.metrics.latencyBuckets[i] || 0
+          }
+        }
+      }
+    }
+    cursor = list.list_complete ? undefined : list.cursor
+  } while (cursor)
+
+  // Build Prometheus text format
+  const lines: string[] = [
+    '# HELP croquet_sessions_total Total number of active sessions',
+    '# TYPE croquet_sessions_total gauge',
+    `croquet_sessions_total{cluster="${env.CLUSTER_LABEL}"} ${totals.sessionCount}`,
+    '',
+    '# HELP croquet_clients_total Total number of connected clients',
+    '# TYPE croquet_clients_total gauge',
+    `croquet_clients_total{cluster="${env.CLUSTER_LABEL}"} ${totals.clientCount}`,
+    '',
+    '# HELP croquet_messages_total Total messages processed',
+    '# TYPE croquet_messages_total counter',
+    `croquet_messages_total{cluster="${env.CLUSTER_LABEL}"} ${totals.messagesTotal}`,
+    '',
+    '# HELP croquet_ticks_total Total ticks generated',
+    '# TYPE croquet_ticks_total counter',
+    `croquet_ticks_total{cluster="${env.CLUSTER_LABEL}"} ${totals.ticksTotal}`,
+    '',
+    '# HELP croquet_latency_milliseconds Message processing latency',
+    '# TYPE croquet_latency_milliseconds histogram',
+  ]
+
+  // Add histogram buckets
+  for (let i = 0; i < LATENCY_BUCKETS.length; i++) {
+    lines.push(`croquet_latency_milliseconds_bucket{cluster="${env.CLUSTER_LABEL}",le="${LATENCY_BUCKETS[i]}"} ${totals.latencyBuckets[i]}`)
+  }
+  lines.push(`croquet_latency_milliseconds_bucket{cluster="${env.CLUSTER_LABEL}",le="+Inf"} ${totals.latencyCount}`)
+  lines.push(`croquet_latency_milliseconds_sum{cluster="${env.CLUSTER_LABEL}"} ${totals.latencySum}`)
+  lines.push(`croquet_latency_milliseconds_count{cluster="${env.CLUSTER_LABEL}"} ${totals.latencyCount}`)
+
+  return new Response(lines.join('\n'), {
+    headers: {
+      'Content-Type': 'text/plain; version=0.0.4; charset=utf-8',
+      'Access-Control-Allow-Origin': '*',
+    },
+  })
+}
+
+/**
+ * Get metrics data as JSON (for UI refresh)
+ */
+async function getMetricsData(env: Env): Promise<Response> {
+  const LATENCY_BUCKETS = [8, 10, 13, 17, 22, 29, 38, 50, 66, 87, 115, 153, 203, 270, 360]
+
+  const sessions: Array<{
+    sessionId: string
+    appId?: string
+    clientCount: number
+    metrics?: SessionRecord['metrics']
+  }> = []
+
+  const totals = {
+    messagesTotal: 0,
+    ticksTotal: 0,
+    latencyBuckets: new Array(LATENCY_BUCKETS.length).fill(0),
+    latencySum: 0,
+    latencyCount: 0,
+    meanLatency: 'N/A',
+  }
+
+  let cursor: string | undefined
+  do {
+    const list = await env.SESSIONS.list({ cursor, limit: 1000 })
+    for (const key of list.keys) {
+      const record = await env.SESSIONS.get<SessionRecord>(key.name, 'json')
+      if (record) {
+        sessions.push({
+          sessionId: record.sessionId,
+          appId: record.appId,
+          clientCount: record.clientCount,
+          metrics: record.metrics,
+        })
+        if (record.metrics) {
+          totals.messagesTotal += record.metrics.messagesTotal
+          totals.ticksTotal += record.metrics.ticksTotal
+          totals.latencySum += record.metrics.latencySum
+          totals.latencyCount += record.metrics.latencyCount
+          for (let i = 0; i < LATENCY_BUCKETS.length; i++) {
+            totals.latencyBuckets[i] += record.metrics.latencyBuckets[i] || 0
+          }
+        }
+      }
+    }
+    cursor = list.list_complete ? undefined : list.cursor
+  } while (cursor)
+
+  totals.meanLatency = totals.latencyCount > 0 ? (totals.latencySum / totals.latencyCount).toFixed(1) + 'ms' : 'N/A'
+
+  return json({ totals, sessions })
+}
+
+/**
+ * Get Storage UI page - shows KV namespace usage
+ */
+async function getStorageUI(env: Env, user: AuthenticatedUser): Promise<Response> {
+  // Helper to count keys and estimate size in a namespace
+  async function scanNamespace(
+    kv: KVNamespace,
+    name: string,
+    binding: string,
+    description: string
+  ): Promise<{
+    namespace: { name: string; binding: string; keyCount: number; estimatedSize: number; description: string }
+    recentKeys: Array<{ namespace: string; key: string; size: number; updatedAt?: number }>
+  }> {
+    let keyCount = 0
+    let estimatedSize = 0
+    const recentKeys: Array<{ namespace: string; key: string; size: number; updatedAt?: number }> = []
+
+    let cursor: string | undefined
+    do {
+      const list = await kv.list({ cursor, limit: 1000 })
+      for (const key of list.keys) {
+        keyCount++
+        // Get value to estimate size (for small datasets)
+        if (keyCount <= 100) {
+          const value = await kv.get(key.name)
+          const size = value ? new TextEncoder().encode(value).length : 0
+          estimatedSize += size
+          // Keep track of recent keys (first 5 from each namespace)
+          if (recentKeys.length < 5) {
+            recentKeys.push({
+              namespace: name,
+              key: key.name,
+              size,
+              updatedAt:
+                key.metadata && typeof key.metadata === 'object' && 'updatedAt' in key.metadata
+                  ? (key.metadata as { updatedAt?: number }).updatedAt
+                  : undefined,
+            })
+          }
+        }
+      }
+      cursor = list.list_complete ? undefined : list.cursor
+    } while (cursor)
+
+    // Extrapolate size if we only sampled
+    if (keyCount > 100) {
+      estimatedSize = Math.round((estimatedSize / 100) * keyCount)
+    }
+
+    return {
+      namespace: { name, binding, keyCount, estimatedSize, description },
+      recentKeys,
+    }
+  }
+
+  // Helper to scan R2 bucket (gracefully handles missing binding)
+  async function scanR2Bucket(): Promise<{
+    namespace: { name: string; binding: string; keyCount: number; estimatedSize: number; description: string } | null
+    recentKeys: Array<{ namespace: string; key: string; size: number; updatedAt?: number }>
+  }> {
+    // Skip if R2 bucket not configured (e.g., local dev)
+    if (!env.SNAPSHOTS) {
+      return { namespace: null, recentKeys: [] }
+    }
+
+    let objectCount = 0
+    let totalSize = 0
+    const recentKeys: Array<{ namespace: string; key: string; size: number; updatedAt?: number }> = []
+
+    let cursor: string | undefined
+    do {
+      const list = await env.SNAPSHOTS.list({ cursor, limit: 1000 })
+      for (const obj of list.objects) {
+        objectCount++
+        totalSize += obj.size
+        // Keep track of recent objects (first 5, sorted by upload time)
+        if (recentKeys.length < 5) {
+          recentKeys.push({
+            namespace: 'Snapshots',
+            key: obj.key,
+            size: obj.size,
+            updatedAt: obj.uploaded?.getTime(),
+          })
+        }
+      }
+      cursor = list.truncated ? list.cursor : undefined
+    } while (cursor)
+
+    return {
+      namespace: {
+        name: 'Snapshots (R2)',
+        binding: 'SNAPSHOTS',
+        keyCount: objectCount,
+        estimatedSize: totalSize,
+        description: 'Session snapshots and persistent state',
+      },
+      recentKeys,
+    }
+  }
+
+  // Scan all KV namespaces and R2 bucket in parallel
+  const [sessionsData, apikeysData, accountsData, synchronizersData, settingsData, snapshotsData] = await Promise.all([
+    scanNamespace(env.SESSIONS, 'Sessions', 'SESSIONS', 'Active session records and state'),
+    scanNamespace(env.APIKEYS, 'API Keys', 'APIKEYS', 'API key records with permissions'),
+    scanNamespace(env.ACCOUNTS, 'Accounts', 'ACCOUNTS', 'Sub-accounts for DePIN API'),
+    scanNamespace(env.SYNCHRONIZERS, 'Synchronizers', 'SYNCHRONIZERS', 'Registered synchronizer instances'),
+    scanNamespace(env.SETTINGS, 'Settings', 'SETTINGS', 'Global configuration and feature flags'),
+    scanR2Bucket(),
+  ])
+
+  const namespaces = [
+    sessionsData.namespace,
+    apikeysData.namespace,
+    accountsData.namespace,
+    synchronizersData.namespace,
+    settingsData.namespace,
+    snapshotsData.namespace,
+  ].filter((ns): ns is NonNullable<typeof ns> => ns !== null)
+
+  // Combine and sort recent keys by size (largest first)
+  const recentKeys = [
+    ...sessionsData.recentKeys,
+    ...apikeysData.recentKeys,
+    ...accountsData.recentKeys,
+    ...synchronizersData.recentKeys,
+    ...settingsData.recentKeys,
+    ...snapshotsData.recentKeys,
+  ]
+    .sort((a, b) => b.size - a.size)
+    .slice(0, 15)
+
+  return html(renderStoragePage(namespaces, recentKeys, user.email, env.CLUSTER_LABEL))
 }
 
 /**

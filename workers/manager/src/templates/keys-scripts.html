@@ -65,7 +65,7 @@
       document.getElementById('createDialog').close()
       document.getElementById('keyCreatedDialog').showModal()
     } catch (err) {
-      alert('Error creating key: ' + err.message)
+      showAlert('Error creating key: ' + err.message, { title: 'Error' })
     }
   })
 
@@ -74,7 +74,12 @@
   }
 
   async function rollKey(id) {
-    if (!confirm('Generate a new key? The old key will stop working immediately.')) return
+    const confirmed = await showConfirm('Generate a new key? The old key will stop working immediately.', {
+      title: 'Roll API Key',
+      confirmText: 'Generate New Key',
+      danger: true,
+    })
+    if (!confirmed) return
 
     try {
       const res = await fetch('/keys/' + id + '/roll', { method: 'POST' })
@@ -86,12 +91,16 @@
       document.getElementById('keyCreatedDialog').querySelector('h3').textContent = 'New API Key Generated'
       document.getElementById('keyCreatedDialog').showModal()
     } catch (err) {
-      alert('Error: ' + err.message)
+      showAlert('Error: ' + err.message, { title: 'Error' })
     }
   }
 
   async function toggleKey(id, active) {
-    if (!confirm(`${active ? 'Enable' : 'Disable'} this API key?`)) return
+    const confirmed = await showConfirm(`${active ? 'Enable' : 'Disable'} this API key?`, {
+      title: active ? 'Enable Key' : 'Disable Key',
+      confirmText: active ? 'Enable' : 'Disable',
+    })
+    if (!confirmed) return
 
     try {
       const res = await fetch('/keys/' + id, {
@@ -102,19 +111,24 @@
       if (!res.ok) throw new Error(await res.text())
       location.reload()
     } catch (err) {
-      alert('Error: ' + err.message)
+      showAlert('Error: ' + err.message, { title: 'Error' })
     }
   }
 
   async function deleteKey(id) {
-    if (!confirm('Delete this API key? This cannot be undone.')) return
+    const confirmed = await showConfirm('Delete this API key? This cannot be undone.', {
+      title: 'Delete API Key',
+      confirmText: 'Delete',
+      danger: true,
+    })
+    if (!confirmed) return
 
     try {
       const res = await fetch('/keys/' + id, { method: 'DELETE' })
       if (!res.ok) throw new Error(await res.text())
       location.reload()
     } catch (err) {
-      alert('Error: ' + err.message)
+      showAlert('Error: ' + err.message, { title: 'Error' })
     }
   }
 
@@ -135,7 +149,7 @@
 
       document.getElementById('editDialog').showModal()
     } catch (err) {
-      alert('Error loading key: ' + err.message)
+      showAlert('Error loading key: ' + err.message, { title: 'Error' })
     }
   }
 
@@ -167,7 +181,7 @@
       document.getElementById('editDialog').close()
       location.reload()
     } catch (err) {
-      alert('Error updating key: ' + err.message)
+      showAlert('Error updating key: ' + err.message, { title: 'Error' })
     }
   })
 </script>

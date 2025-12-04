@@ -9,6 +9,9 @@
     "deploy:staging": "npm run build:css && wrangler deploy --env staging",
     "deploy:production": "npm run build:css && wrangler deploy --env production"
   },
+  "dependencies": {
+    "@croquet/worker-shared": "file:../shared"
+  },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20241127.0",
     "@tailwindcss/cli": "^4.1.17",
