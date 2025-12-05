@@ -1,5 +1,112 @@
 <script>
   let newKey = ''
+  let revealedKey = ''
+
+  // ========================================
+  // Lookup Key Functions
+  // ========================================
+
+  function closeLookupDialog() {
+    document.getElementById('lookupDialog').close()
+    document.getElementById('lookupResult').classList.add('hidden')
+    document.getElementById('lookupKeyValue').value = ''
+  }
+
+  document.getElementById('lookupForm').addEventListener('submit', async (e) => {
+    e.preventDefault()
+    const keyValue = document.getElementById('lookupKeyValue').value.trim()
+    if (!keyValue) return
+
+    const resultDiv = document.getElementById('lookupResult')
+    resultDiv.innerHTML = '<div class="text-muted-foreground">Searching...</div>'
+    resultDiv.classList.remove('hidden')
+
+    try {
+      const res = await fetch('/keys/lookup?key=' + encodeURIComponent(keyValue))
+      if (!res.ok) throw new Error(await res.text())
+
+      const result = await res.json()
+
+      if (result.found) {
+        resultDiv.innerHTML = `
+          <div class="bg-green-900/30 border border-green-700/50 rounded-lg p-4">
+            <div class="flex items-center gap-2 mb-3">
+              <svg class="w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span class="font-medium text-green-400">Key Found</span>
+            </div>
+            <div class="space-y-2 text-sm">
+              <div><span class="text-muted-foreground">Name:</span> <span class="font-medium">${escapeHtml(result.name)}</span></div>
+              <div><span class="text-muted-foreground">ID:</span> <span class="font-mono text-xs cursor-pointer hover:text-foreground" onclick="copyToClipboard('${result.id}', 'Key ID')">${result.id}</span></div>
+              <div><span class="text-muted-foreground">Status:</span> <span class="badge ${result.active ? 'badge-success' : 'badge-destructive'} ml-1">${result.active ? 'Active' : 'Inactive'}</span></div>
+              <div><span class="text-muted-foreground">Tier:</span> ${result.tier}</div>
+              <div><span class="text-muted-foreground">Domains:</span> ${result.allowedDomains.slice(0, 3).join(', ')}${result.allowedDomains.length > 3 ? '...' : ''}</div>
+            </div>
+          </div>
+        `
+      } else {
+        resultDiv.innerHTML = `
+          <div class="bg-red-900/30 border border-red-700/50 rounded-lg p-4">
+            <div class="flex items-center gap-2">
+              <svg class="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span class="font-medium text-red-400">Key Not Found</span>
+            </div>
+            <p class="text-sm text-muted-foreground mt-2">This API key does not exist in the system.</p>
+          </div>
+        `
+      }
+    } catch (err) {
+      resultDiv.innerHTML = `
+        <div class="bg-red-900/30 border border-red-700/50 rounded-lg p-4">
+          <div class="text-red-400">Error: ${escapeHtml(err.message)}</div>
+        </div>
+      `
+    }
+  })
+
+  // ========================================
+  // Reveal Key Functions
+  // ========================================
+
+  async function revealKey(id) {
+    const confirmed = await showConfirm('Reveal the actual API key value? This action is logged for security.', {
+      title: 'Reveal API Key',
+      confirmText: 'Reveal Key',
+      danger: false,
+    })
+    if (!confirmed) return
+
+    try {
+      const res = await fetch('/keys/' + id + '/reveal')
+      if (!res.ok) throw new Error(await res.text())
+
+      const result = await res.json()
+      revealedKey = result.key
+      document.getElementById('revealKeyName').textContent = result.name
+      document.getElementById('revealKeyDisplay').textContent = result.key
+      document.getElementById('revealDialog').showModal()
+    } catch (err) {
+      showAlert('Error: ' + err.message, { title: 'Error' })
+    }
+  }
+
+  function copyRevealedKey() {
+    navigator.clipboard.writeText(revealedKey)
+    showToast('Key copied to clipboard')
+  }
+
+  function escapeHtml(text) {
+    const div = document.createElement('div')
+    div.textContent = text
+    return div.innerHTML
+  }
+
+  // ========================================
+  // Filter Functions
+  // ========================================
 
   function filterByAccount(accountId) {
     // Filter elements by data-account-id attribute

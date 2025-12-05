@@ -198,18 +198,99 @@ select.input {
   color: rgb(248 113 113);
 }
 
-/* Dialog styles */
-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.8);
-}
-
-dialog {
+/* Modal/Dialog component */
+.modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  margin: 0;
   border-radius: 0.75rem;
   border: 1px solid hsl(240 3.7% 15.9%);
   background-color: hsl(240 10% 3.9%);
-  padding: 0;
+  padding: 1rem;
   color: hsl(0 0% 98%);
   box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1);
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.95);
+  transition:
+    opacity 0.2s ease-out,
+    transform 0.2s ease-out,
+    display 0.2s ease-out allow-discrete,
+    overlay 0.2s ease-out allow-discrete;
+  width: calc(100% - 2rem);
+  max-width: 32rem; /* lg = 512px */
+}
+
+@media (min-width: 640px) {
+  .modal {
+    padding: 1.5rem;
+  }
+}
+
+.modal[open] {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.modal::backdrop {
+  background: rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  transition: opacity 0.2s ease-out;
+}
+
+.modal[open]::backdrop {
+  opacity: 1;
+}
+
+/* Modal size variants */
+.modal-sm {
+  max-width: 24rem; /* sm = 384px */
+}
+
+.modal-md {
+  max-width: 28rem; /* md = 448px */
+}
+
+.modal-xl {
+  max-width: 36rem; /* xl = 576px */
+}
+
+/* Modal inner elements */
+.modal-title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+}
+
+.modal-description {
+  font-size: 0.875rem;
+  color: hsl(240 5% 64.9%);
+  margin-bottom: 1rem;
+}
+
+.modal-footer {
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+
+@media (min-width: 640px) {
+  .modal-footer {
+    flex-direction: row;
+    justify-content: flex-end;
+  }
+}
+
+/* Starting style for open animation */
+@starting-style {
+  .modal[open] {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.95);
+  }
+  .modal[open]::backdrop {
+    opacity: 0;
+  }
 }
 
 /* Toast notifications */

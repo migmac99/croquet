@@ -280,6 +280,17 @@ export default {
       const rollMatch = path.match(/^\/keys\/([a-f0-9]+)\/roll$/)
       if (rollMatch && request.method === 'POST') return await rollApiKey(rollMatch[1], env, user)
 
+      // Reveal API key (get actual key value)
+      const revealMatch = path.match(/^\/keys\/([a-f0-9]+)\/reveal$/)
+      if (revealMatch && request.method === 'GET') return await revealApiKey(revealMatch[1], env, user)
+
+      // Lookup API key by value (check if exists)
+      if (path === '/keys/lookup') {
+        const keyValue = url.searchParams.get('key')
+        if (!keyValue) return error('Missing key parameter', 400)
+        return await lookupApiKey(keyValue, env)
+      }
+
       // Metrics endpoints
       if (path === '/metrics') return await getPrometheusMetrics(env) // Prometheus format
       if (path === '/api/metrics-data') return await getMetricsData(env) // JSON for UI refresh
@@ -500,6 +511,66 @@ async function getApiKey(keyId: string, env: Env): Promise<Response> {
   // Never return the actual key
   const { key: _, ...safe } = record
   return json(safe)
+}
+
+/**
+ * Lookup API key by its actual value (to check if it exists)
+ */
+async function lookupApiKey(keyValue: string, env: Env): Promise<Response> {
+  const record = await env.APIKEYS.get<ApiKeyRecord>(`key:${keyValue}`, 'json')
+  if (!record) {
+    return json({ found: false, key: keyValue })
+  }
+
+  // Return metadata but NOT the key itself
+  return json({
+    found: true,
+    id: record.id,
+    name: record.name,
+    active: record.active,
+    tier: record.tier,
+    allowedDomains: record.allowedDomains,
+    createdAt: record.createdAt,
+    lastUsed: record.lastUsed,
+    accountId: record.accountId,
+  })
+}
+
+/**
+ * Reveal the actual key value (admin action with logging)
+ */
+async function revealApiKey(keyId: string, env: Env, user: AuthenticatedUser): Promise<Response> {
+  // Get the ID record first to verify it exists
+  const idRecord = await env.APIKEYS.get<ApiKeyRecord>(`id:${keyId}`, 'json')
+  if (!idRecord) return error('API key not found', 404)
+
+  // Find the full record with the actual key
+  let fullRecord: ApiKeyRecord | null = null
+  let cursor: string | undefined
+
+  do {
+    const result = await env.APIKEYS.list({ prefix: 'key:', cursor })
+    for (const k of result.keys) {
+      const record = await env.APIKEYS.get<ApiKeyRecord>(k.name, 'json')
+      if (record && record.id === keyId) {
+        fullRecord = record
+        break
+      }
+    }
+    if (fullRecord) break
+    cursor = result.list_complete ? undefined : result.cursor
+  } while (cursor)
+
+  if (!fullRecord) return error('API key data inconsistency', 500)
+
+  // Log this sensitive action
+  console.log(`[AUDIT] API key ${keyId} revealed by ${user.email} at ${new Date().toISOString()}`)
+
+  return json({
+    id: fullRecord.id,
+    key: fullRecord.key,
+    name: fullRecord.name,
+  })
 }
 
 async function updateApiKey(keyId: string, request: Request, env: Env, user: AuthenticatedUser): Promise<Response> {

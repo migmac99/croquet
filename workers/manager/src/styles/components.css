@@ -188,16 +188,50 @@ select.input {
 
 /* Dialog styles */
 dialog::backdrop {
-  background: rgba(0, 0, 0, 0.8);
+  background: rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  transition: opacity 0.2s ease-out;
+}
+
+dialog[open]::backdrop {
+  opacity: 1;
 }
 
 dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  translate: -50% -50%;
+  margin: 0;
   border-radius: 0.75rem;
   border: 1px solid hsl(240 3.7% 15.9%);
   background-color: hsl(240 10% 3.9%);
   padding: 0;
   color: hsl(0 0% 98%);
   box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1);
+  opacity: 0;
+  transform: scale(0.95);
+  transition:
+    opacity 0.2s ease-out,
+    transform 0.2s ease-out,
+    display 0.2s ease-out allow-discrete,
+    overlay 0.2s ease-out allow-discrete;
+}
+
+dialog[open] {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* Starting style for open animation (CSS starting-style) */
+@starting-style {
+  dialog[open] {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  dialog[open]::backdrop {
+    opacity: 0;
+  }
 }
 
 /* Toast notifications */

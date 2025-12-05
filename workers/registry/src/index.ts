@@ -121,6 +121,44 @@ async function validateApiKey(request: Request, env: Env): Promise<ApiKeyValidat
   }
 }
 
+/**
+ * Validate API key from a direct value (for POST body)
+ */
+async function validateApiKeyValue(apiKey: string, env: Env, origin?: string): Promise<ApiKeyValidation> {
+  if (!apiKey) return { valid: false, error: 'Missing API key' }
+
+  // Look up API key
+  const record = await env.APIKEYS.get<ApiKeyRecord>(`key:${apiKey}`, 'json')
+  if (!record) return { valid: false, error: 'Invalid API key' }
+  if (!record.active) return { valid: false, error: 'API key is deactivated' }
+
+  // Check domain whitelist if origin provided
+  if (origin) {
+    const originCheck = isOriginAllowed(origin, record.allowedDomains)
+    if (!originCheck.allowed) return { valid: false, error: originCheck.error }
+  }
+
+  // Update last used (fire and forget)
+  const updated: ApiKeyRecord = {
+    ...record,
+    lastUsed: Date.now(),
+    stats: {
+      totalRequests: (record.stats?.totalRequests || 0) + 1,
+      totalSessions: record.stats?.totalSessions || 0,
+    },
+  }
+  env.APIKEYS.put(`key:${apiKey}`, JSON.stringify(updated))
+  const { key: _, ...safeUpdated } = updated
+  env.APIKEYS.put(`id:${record.id}`, JSON.stringify({ ...safeUpdated, key: '[REDACTED]' }))
+
+  return {
+    valid: true,
+    keyId: record.id,
+    tier: record.tier,
+    accountId: record.accountId,
+  }
+}
+
 // ============================================================================
 // Dispatch Handler
 // ============================================================================
@@ -130,23 +168,51 @@ async function validateApiKey(request: Request, env: Env): Promise<ApiKeyValidat
  *
  * GET /dispatch?session={sessionId}&app={appId}
  * Headers: X-API-Key: {key}
+ *
+ * OR
+ *
+ * POST /dispatch
+ * Body: { sessionId, appId, apiKey? }
  */
 async function handleDispatch(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url)
+  let sessionId: string | null = null
+  let appId: string | null = null
+  let apiKeyFromBody: string | null = null
+
+  // Support both GET (query params) and POST (JSON body)
+  if (request.method === 'POST') {
+    try {
+      const body = (await request.json()) as { sessionId?: string; appId?: string; apiKey?: string }
+      sessionId = body.sessionId || null
+      appId = body.appId || null
+      apiKeyFromBody = body.apiKey || null
+    } catch {
+      return Response.json({ error: 'Invalid JSON body' }, { status: 400, headers: corsHeaders() })
+    }
+  } else {
+    sessionId = url.searchParams.get('session')
+    appId = url.searchParams.get('app')
+  }
+
+  if (!sessionId) return Response.json({ error: 'Missing session parameter' }, { status: 400, headers: corsHeaders() })
+
   // Check if API key is required
   const requireKey = env.REQUIRE_API_KEY === 'true'
+  console.log(`[dispatch] REQUIRE_API_KEY="${env.REQUIRE_API_KEY}" requireKey=${requireKey} apiKeyFromBody="${apiKeyFromBody}"`)
 
   let validation: ApiKeyValidation = { valid: true }
 
   if (requireKey) {
-    validation = await validateApiKey(request, env)
+    // For POST, check body apiKey first, then header
+    if (apiKeyFromBody) {
+      validation = await validateApiKeyValue(apiKeyFromBody, env, getOrigin(request) ?? undefined)
+    } else {
+      validation = await validateApiKey(request, env)
+    }
+    console.log(`[dispatch] validation result:`, validation)
     if (!validation.valid) return Response.json({ error: 'Unauthorized', message: validation.error }, { status: 401, headers: corsHeaders() })
   }
-
-  const url = new URL(request.url)
-  const appId = url.searchParams.get('app')
-
-  const sessionId = url.searchParams.get('session')
-  if (!sessionId) return Response.json({ error: 'Missing session parameter' }, { status: 400, headers: corsHeaders() })
 
   // Check for existing session
   const existing = await env.SESSIONS.get<SessionRecord>(sessionId, 'json')
@@ -157,9 +223,11 @@ async function handleDispatch(request: Request, env: Env): Promise<Response> {
     const ttl = Number(env.SESSION_TTL_SECONDS) || 3600
     await env.SESSIONS.put(sessionId, JSON.stringify(existing), { expirationTtl: ttl })
 
+    // Always return the canonical synchronizer URL from env, not what's stored in the session
+    // (the stored value might be a cluster label or other non-URL value from /register)
     return Response.json(
       {
-        synchronizer: existing.synchronizerUrl,
+        synchronizer: env.SYNCHRONIZER_URL,
         sessionId: existing.sessionId,
         existing: true,
       } satisfies DispatchResponse & { existing: boolean },

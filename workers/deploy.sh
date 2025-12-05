@@ -311,7 +311,7 @@ id = "$apikeys_kv_id"
 SYNCHRONIZER_URL = "ws://localhost:8787"
 CLUSTER_LABEL = "local-dev"
 SESSION_TTL_SECONDS = "3600"
-REQUIRE_API_KEY = "false"
+REQUIRE_API_KEY = "true"
 
 # ============================================================================
 # Production environment

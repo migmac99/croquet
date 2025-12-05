@@ -34,6 +34,62 @@ function render(template: string, data: Record<string, string | number>): string
   })
 }
 
+// ============================================================================
+// UI Components
+// ============================================================================
+
+/**
+ * Generate a dialog/modal with consistent styling
+ */
+export function dialog(options: {
+  id: string
+  title: string
+  content: string
+  footer?: string
+  description?: string
+  size?: 'sm' | 'md' | 'lg' | 'xl'
+}): string {
+  const sizeClass = options.size && options.size !== 'lg' ? ` modal-${options.size}` : ''
+  const desc = options.description ? `<p class="modal-description">${options.description}</p>` : ''
+  const footer = options.footer ? `<div class="modal-footer">${options.footer}</div>` : ''
+
+  return `<dialog id="${options.id}" class="modal${sizeClass}">
+  <h3 class="modal-title">${options.title}</h3>
+  ${desc}${options.content}${footer}
+</dialog>`
+}
+
+/**
+ * Common button helpers for dialog footers
+ */
+export const btn = {
+  cancel: (dialogId: string, text = 'Cancel') =>
+    `<button type="button" onclick="document.getElementById('${dialogId}').close()" class="btn btn-ghost">${text}</button>`,
+  close: (dialogId: string, text = 'Close') =>
+    `<button type="button" onclick="document.getElementById('${dialogId}').close()" class="btn btn-ghost">${text}</button>`,
+  submit: (text = 'Submit') => `<button type="submit" class="btn btn-primary">${text}</button>`,
+  primary: (onclick: string, text: string) => `<button onclick="${onclick}" class="btn btn-primary">${text}</button>`,
+  secondary: (onclick: string, text: string) => `<button onclick="${onclick}" class="btn btn-secondary">${text}</button>`,
+  danger: (onclick: string, text: string) => `<button onclick="${onclick}" class="btn btn-destructive">${text}</button>`,
+}
+
+/**
+ * Form field helpers
+ */
+export const field = {
+  text: (opts: { name: string; label: string; placeholder?: string; required?: boolean; id?: string; mono?: boolean }) =>
+    `<div>
+      <label class="text-sm font-medium mb-2 block">${opts.label}</label>
+      <input type="text" name="${opts.name}"${opts.id ? ` id="${opts.id}"` : ''}${opts.required ? ' required' : ''} class="input${opts.mono ? ' font-mono' : ''}" placeholder="${opts.placeholder || ''}" />
+    </div>`,
+  select: (opts: { name: string; label: string; options: string; id?: string; hint?: string }) =>
+    `<div>
+      <label class="text-sm font-medium mb-2 block">${opts.label}</label>
+      <select name="${opts.name}"${opts.id ? ` id="${opts.id}"` : ''} class="input">${opts.options}</select>
+      ${opts.hint ? `<p class="text-xs text-muted-foreground mt-1">${opts.hint}</p>` : ''}
+    </div>`,
+}
+
 /**
  * Render a page with the base layout
  */
@@ -153,6 +209,7 @@ export function renderKeysPage(
         <span class="cursor-pointer hover:text-foreground transition-colors" onclick="copyToClipboard('${key.stats?.totalRequests || 0}', 'Request count')" title="Click to copy">${key.stats?.totalRequests || 0} requests</span>
       </div>
       <div class="flex gap-3 pt-4 border-t border-border">
+        <button onclick="revealKey('${key.id}')" class="btn btn-ghost btn-sm flex-1">Reveal</button>
         <button onclick="editKey('${key.id}')" class="btn btn-ghost btn-sm flex-1">Edit</button>
         <button onclick="rollKey('${key.id}')" class="btn btn-ghost btn-sm flex-1">Roll</button>
         <button onclick="deleteKey('${key.id}')" class="btn btn-ghost btn-sm text-red-400 hover:text-red-300">Delete</button>
@@ -203,6 +260,7 @@ export function renderKeysPage(
       </td>
       <td class="px-6 py-5">
         <div class="flex gap-2">
+          <button onclick="revealKey('${key.id}')" class="btn btn-ghost btn-sm">Reveal</button>
           <button onclick="editKey('${key.id}')" class="btn btn-ghost btn-sm">Edit</button>
           <button onclick="rollKey('${key.id}')" class="btn btn-ghost btn-sm">Roll</button>
           <button onclick="deleteKey('${key.id}')" class="btn btn-ghost btn-sm text-red-400 hover:text-red-300">Delete</button>

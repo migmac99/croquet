@@ -4,6 +4,12 @@
     <p class="text-sm sm:text-base text-muted-foreground mt-2">Manage API keys for your applications</p>
   </div>
   <div class="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+    <button onclick="document.getElementById('lookupDialog').showModal()" class="btn btn-outline w-full sm:w-auto whitespace-nowrap">
+      <svg class="w-4 h-4 mr-2.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+      </svg>
+      Lookup Key
+    </button>
     <select id="accountFilter" onchange="filterByAccount(this.value)" class="input w-full sm:w-48">
       <option value="">All accounts</option>
       <option value="__none__">No account</option>
@@ -44,22 +50,19 @@
 </div>
 
 <!-- Create Key Dialog -->
-<dialog id="createDialog" class="p-4 sm:p-6 w-[calc(100%-2rem)] max-w-lg">
+<dialog id="createDialog" class="modal">
   <form method="dialog" id="createForm">
-    <h3 class="text-lg font-semibold mb-4">Create API Key</h3>
-
+    <h3 class="modal-title">Create API Key</h3>
     <div class="space-y-4">
       <div>
         <label class="text-sm font-medium mb-2 block">Name</label>
         <input type="text" name="name" required class="input" placeholder="My App" />
       </div>
-
       <div>
         <label class="text-sm font-medium mb-2 block">Allowed Domains</label>
         <input type="text" name="domains" required class="input" placeholder="localhost:*, *.myapp.com" />
         <p class="text-xs text-muted-foreground mt-1">Comma-separated. Supports wildcards: *, *.domain.com, localhost:*</p>
       </div>
-
       <div>
         <label class="text-sm font-medium mb-2 block">Tier</label>
         <select name="tier" class="input">
@@ -69,7 +72,6 @@
           <option value="unlimited">Unlimited</option>
         </select>
       </div>
-
       <div>
         <label class="text-sm font-medium mb-2 block">Key Version</label>
         <select name="version" class="input">
@@ -79,7 +81,6 @@
         </select>
         <p class="text-xs text-muted-foreground mt-1">v3 is recommended for Cloudflare Workers deployments</p>
       </div>
-
       <div>
         <label class="text-sm font-medium mb-2 block">Account (Optional)</label>
         <select name="accountId" class="input">
@@ -89,8 +90,7 @@
         <p class="text-xs text-muted-foreground mt-1">Associate this key with a sub-account for DePIN API access</p>
       </div>
     </div>
-
-    <div class="flex flex-col-reverse sm:flex-row justify-end gap-3 mt-6">
+    <div class="modal-footer">
       <button type="button" onclick="document.getElementById('createDialog').close()" class="btn btn-ghost">Cancel</button>
       <button type="submit" class="btn btn-primary">Create Key</button>
     </div>
@@ -98,11 +98,11 @@
 </dialog>
 
 <!-- Key Created Dialog -->
-<dialog id="keyCreatedDialog" class="p-4 sm:p-6 w-[calc(100%-2rem)] max-w-lg">
-  <h3 class="text-lg font-semibold mb-4">API Key Created</h3>
-  <p class="text-sm text-muted-foreground mb-4">Save this key now. You won't be able to see it again!</p>
+<dialog id="keyCreatedDialog" class="modal">
+  <h3 class="modal-title">API Key Created</h3>
+  <p class="modal-description">Save this key now. You won't be able to see it again!</p>
   <div class="bg-secondary p-3 sm:p-4 rounded-md font-mono text-xs sm:text-sm break-all" id="newKeyDisplay"></div>
-  <div class="flex flex-col-reverse sm:flex-row justify-end gap-3 mt-6">
+  <div class="modal-footer">
     <button onclick="copyKey()" class="btn btn-secondary">Copy</button>
     <button
       onclick="
@@ -117,23 +117,20 @@
 </dialog>
 
 <!-- Edit Key Dialog -->
-<dialog id="editDialog" class="p-4 sm:p-6 w-[calc(100%-2rem)] max-w-lg">
+<dialog id="editDialog" class="modal">
   <form method="dialog" id="editForm">
-    <h3 class="text-lg font-semibold mb-4">Edit API Key</h3>
+    <h3 class="modal-title">Edit API Key</h3>
     <input type="hidden" name="id" id="editKeyId" />
-
     <div class="space-y-4">
       <div>
         <label class="text-sm font-medium mb-2 block">Name</label>
         <input type="text" name="name" id="editKeyName" required class="input" placeholder="My App" />
       </div>
-
       <div>
         <label class="text-sm font-medium mb-2 block">Allowed Domains</label>
         <input type="text" name="domains" id="editKeyDomains" required class="input" placeholder="localhost:*, *.myapp.com" />
         <p class="text-xs text-muted-foreground mt-1">Comma-separated. Supports wildcards: *, *.domain.com, localhost:*</p>
       </div>
-
       <div>
         <label class="text-sm font-medium mb-2 block">Tier</label>
         <select name="tier" id="editKeyTier" class="input">
@@ -143,7 +140,6 @@
           <option value="unlimited">Unlimited</option>
         </select>
       </div>
-
       <div>
         <label class="text-sm font-medium mb-2 block">Status</label>
         <select name="active" id="editKeyActive" class="input">
@@ -151,7 +147,6 @@
           <option value="false">Inactive</option>
         </select>
       </div>
-
       <div>
         <label class="text-sm font-medium mb-2 block">Account</label>
         <select name="accountId" id="editKeyAccount" class="input">
@@ -161,10 +156,40 @@
         <p class="text-xs text-muted-foreground mt-1">Associate this key with a sub-account</p>
       </div>
     </div>
-
-    <div class="flex flex-col-reverse sm:flex-row justify-end gap-3 mt-6">
+    <div class="modal-footer">
       <button type="button" onclick="document.getElementById('editDialog').close()" class="btn btn-ghost">Cancel</button>
       <button type="submit" class="btn btn-primary">Save Changes</button>
     </div>
   </form>
+</dialog>
+
+<!-- Lookup Key Dialog -->
+<dialog id="lookupDialog" class="modal">
+  <form method="dialog" id="lookupForm">
+    <h3 class="modal-title">Lookup API Key</h3>
+    <p class="modal-description">Check if an API key exists in the system</p>
+    <div class="space-y-4">
+      <div>
+        <label class="text-sm font-medium mb-2 block">API Key Value</label>
+        <input type="text" name="keyValue" id="lookupKeyValue" required class="input font-mono" placeholder="3abc123..." />
+        <p class="text-xs text-muted-foreground mt-1">Enter the full API key value to search</p>
+      </div>
+    </div>
+    <div id="lookupResult" class="hidden mt-4"></div>
+    <div class="modal-footer">
+      <button type="button" onclick="closeLookupDialog()" class="btn btn-ghost">Close</button>
+      <button type="submit" class="btn btn-primary">Search</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Reveal Key Dialog -->
+<dialog id="revealDialog" class="modal">
+  <h3 class="modal-title">API Key: <span id="revealKeyName" class="text-muted-foreground font-normal"></span></h3>
+  <p class="modal-description">This key grants API access. Keep it secure!</p>
+  <div class="bg-secondary p-3 sm:p-4 rounded-md font-mono text-xs sm:text-sm break-all" id="revealKeyDisplay"></div>
+  <div class="modal-footer">
+    <button onclick="copyRevealedKey()" class="btn btn-secondary">Copy</button>
+    <button onclick="document.getElementById('revealDialog').close()" class="btn btn-primary">Done</button>
+  </div>
 </dialog>
