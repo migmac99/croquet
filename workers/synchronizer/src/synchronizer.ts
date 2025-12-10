@@ -447,44 +447,46 @@ export class Synchronizer extends DurableObject<Env> {
     // With a snapshot, client loads snapshot and replays messages
     const clientMustInitFresh = !snapshotUrl
 
-    if (clientMustInitFresh) {
-      // No snapshot - client will init fresh
-      // For late joiners: keep messages if they start at the right seq for catchup
-      // For first client (or reconnect to empty session): start with empty messages
-      if (isEffectivelyFirstClient) {
-        this.state.messages = []
+    // CRITICAL: When session effectively restarts (first client after all left),
+    // clear message buffer to prevent stale USERS events from being replayed.
+    // Stale USERS events cause view count mismatches because the same viewId
+    // appearing multiple times accumulates extraConnections in the client VM.
+    if (isEffectivelyFirstClient) {
+      console.log(`[${this.sessionId}] First client joining - clearing stale message buffer (had ${this.state.messages.length} messages)`)
+      this.state.messages = []
+      if (clientMustInitFresh) {
         this.state.seq = INITIAL_SEQ
-        // Clear any pending users batch (stale from previous session)
-        this.state.usersJoined = []
-        this.state.usersLeft = []
-        if (this.usersTimer) {
-          clearTimeout(this.usersTimer)
-          this.usersTimer = null
-        }
-      } else {
-        // Late joiner without snapshot - check if messages can be replayed
-        // If messages is empty, that's fine (fresh session, no messages yet)
-        // If messages exist but start at wrong seq, reset (stale session)
-        if (this.state.messages.length > 0) {
-          const firstMsgSeq = (this.state.messages[0] as number[] | undefined)?.[1]
-          if (firstMsgSeq !== (INITIAL_SEQ + 1) >>> 0) {
-            // Messages can't be used for catchup - reset
-            console.log(`[${this.sessionId}] Resetting session - messages start at ${firstMsgSeq}, expected ${(INITIAL_SEQ + 1) >>> 0}`)
-            this.state.messages = []
-            this.state.seq = INITIAL_SEQ
-            // Generate new timeline to force all clients to reconnect fresh
-            this.state.timeline = generateTimeline()
-            // Clear any pending users batch (stale from previous session)
-            this.state.usersJoined = []
-            this.state.usersLeft = []
-            if (this.usersTimer) {
-              clearTimeout(this.usersTimer)
-              this.usersTimer = null
-            }
+      }
+      // Clear any pending users batch (stale from previous session)
+      this.state.usersJoined = []
+      this.state.usersLeft = []
+      if (this.usersTimer) {
+        clearTimeout(this.usersTimer)
+        this.usersTimer = null
+      }
+    } else if (clientMustInitFresh) {
+      // Late joiner without snapshot - check if messages can be replayed
+      // If messages is empty, that's fine (fresh session, no messages yet)
+      // If messages exist but start at wrong seq, reset (stale session)
+      if (this.state.messages.length > 0) {
+        const firstMsgSeq = (this.state.messages[0] as number[] | undefined)?.[1]
+        if (firstMsgSeq !== (INITIAL_SEQ + 1) >>> 0) {
+          // Messages can't be used for catchup - reset
+          console.log(`[${this.sessionId}] Resetting session - messages start at ${firstMsgSeq}, expected ${(INITIAL_SEQ + 1) >>> 0}`)
+          this.state.messages = []
+          this.state.seq = INITIAL_SEQ
+          // Generate new timeline to force all clients to reconnect fresh
+          this.state.timeline = generateTimeline()
+          // Clear any pending users batch (stale from previous session)
+          this.state.usersJoined = []
+          this.state.usersLeft = []
+          if (this.usersTimer) {
+            clearTimeout(this.usersTimer)
+            this.usersTimer = null
           }
         }
-        // If messages is empty, that's fine - it's a fresh session with no messages yet
       }
+      // If messages is empty, that's fine - it's a fresh session with no messages yet
     }
 
     // syncSeq tells client where messages start from
