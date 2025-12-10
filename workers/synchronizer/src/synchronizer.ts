@@ -495,19 +495,20 @@ export class Synchronizer extends DurableObject<Env> {
       // If messages is empty, that's fine - it's a fresh session with no messages yet
     }
 
-    // syncSeq tells client where messages start from
-    // For fresh init: INITIAL_SEQ (so first msg is INITIAL_SEQ+1)
-    // For snapshot: the snapshot's seq
-    const syncSeq = clientMustInitFresh ? INITIAL_SEQ : snapshotSeq
+    // syncTime is the time at the snapshot (or 0 for fresh init)
     const syncTime = clientMustInitFresh ? 0 : snapshotTime
 
     // Send SYNC response (official Croquet protocol format)
     // Must include: url, messages, time, seq, tove, reflector, timeline, flags
+    //
+    // CRITICAL: seq MUST be the CURRENT this.state.seq (matches original reflector: island.seq)
+    // NOT snapshotSeq or INITIAL_SEQ! The client uses this to know what seq to expect next.
+    // After replaying buffered messages, client expects seq+1 for new messages.
     const syncArgs: Record<string, unknown> = {
       url: snapshotUrl,
       messages: this.state.messages, // Buffered messages since snapshot (for catchup)
       time: syncTime,
-      seq: syncSeq,
+      seq: this.state.seq, // MUST be current seq (matches original reflector)
       tove: this.state.tove,
       reflector: this.env.CLUSTER_LABEL || 'synq',
       timeline: this.state.timeline,
@@ -534,7 +535,7 @@ export class Synchronizer extends DurableObject<Env> {
     // Debug: log SYNC details
     console.log(
       `[${this.sessionId}] Sending SYNC: url=${snapshotUrl ? '<snapshot>' : '<none>'}, ` +
-        `time=${syncTime}, seq=${syncSeq}, messages=${this.state.messages.length}, timeline=${this.state.timeline.slice(0, 8)}`
+        `time=${syncTime}, seq=${this.state.seq}, messages=${this.state.messages.length}, timeline=${this.state.timeline.slice(0, 8)}`
     )
 
     ws.send(JSON.stringify(syncResponse))
@@ -562,8 +563,7 @@ export class Synchronizer extends DurableObject<Env> {
     console.log(
       `[${this.sessionId}] JOIN from ${attachment.clientId} (user: ${args.user}), ` +
         `isEffectivelyFirstClient=${isEffectivelyFirstClient}, clientMustInitFresh=${clientMustInitFresh}, ` +
-        `seq=${this.state.seq}, messages=${this.state.messages.length}, ` +
-        `syncSeq=${syncSeq}, syncTime=${syncTime}`
+        `seq=${this.state.seq}, messages=${this.state.messages.length}, syncTime=${syncTime}`
     )
   }
 
@@ -606,6 +606,9 @@ export class Synchronizer extends DurableObject<Env> {
     const payload: Record<string, unknown> = { what: 'users', active, total }
     if (joined.length > 0) payload.joined = joined.filter(Boolean)
     if (left.length > 0) payload.left = left.filter(Boolean)
+
+    // Add _size property for accounting (matches original reflector)
+    payload._size = JSON.stringify(payload).length
 
     // Build message in raw format: [time, seq, payload]
     const message = [time, this.state.seq, payload]
@@ -757,6 +760,10 @@ export class Synchronizer extends DurableObject<Env> {
       }
     }
 
+    // CRITICAL: Extract latency BEFORE any modifications (matches original reflector)
+    // Original reflector extracts latency in case 'SEND' BEFORE calling SEND() which modifies the message
+    const latency = args[args.length - 1]
+
     // Advance time (matches original reflector)
     const time = advanceTime(this.state, 'SEND')
 
@@ -770,7 +777,14 @@ export class Synchronizer extends DurableObject<Env> {
     message[0] = time
     message[1] = this.state.seq
 
+    // Add _size property to non-string payloads for accounting (matches original reflector)
+    // See payloadSizeForAccounting() - ensures synchronizer and clients see same byte tally
+    if (typeof message[2] !== 'string' && message[2] != null) {
+      ;(message[2] as Record<string, unknown>)._size = JSON.stringify(message[2]).length
+    }
+
     // If rawtime flag is set, overwrite last element with raw time (matches original reflector)
+    // This MUST happen AFTER extracting latency above
     if (this.state.flags?.rawtime) message[message.length - 1] = getRawTime(this.state)
 
     // Debug: log SEND message received
@@ -787,11 +801,8 @@ export class Synchronizer extends DurableObject<Env> {
     // Track message count (matches original reflector prometheusMessagesCounter)
     this.metrics.messagesTotal++
 
-    // Record latency (matches original reflector: args[args.length - 1] is latency)
-    // The original client sends latency in the last element of the message args
-    const latency = args[args.length - 1]
-
     // Record latency in histogram (matches original reflector prometheusLatencyHistogram)
+    // Using the latency extracted BEFORE rawtime modification
     if (typeof latency === 'number' && latency > 0 && latency < 60000) recordLatency(this.metrics, latency)
 
     // Persist state (debounced via write coalescing)
@@ -1089,6 +1100,11 @@ export class Synchronizer extends DurableObject<Env> {
     const message = [...messageContent]
     message[0] = time
     message[1] = this.state.seq
+
+    // Add _size property to non-string payloads for accounting (matches original reflector)
+    if (typeof message[2] !== 'string' && message[2] != null) {
+      ;(message[2] as Record<string, unknown>)._size = JSON.stringify(message[2]).length
+    }
 
     // If rawtime flag is set, overwrite last element with raw time
     if (this.state.flags?.rawtime && message.length > 3) message[message.length - 1] = getRawTime(this.state)
