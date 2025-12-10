@@ -26,6 +26,12 @@ function now(): number {
   return Date.now()
 }
 
+/** Answer true if seqB comes after seqA (wraparound-safe for uint32) - matches original reflector */
+function after(seqA: number, seqB: number): boolean {
+  const seqDelta = (seqB - seqA) >>> 0 // make unsigned
+  return seqDelta > 0 && seqDelta < 0x80000000
+}
+
 /** Get scaled time for session (advances at session's scale rate) */
 function getScaledTime(state: SessionState): number {
   const sinceStart = now() - state.scaledStart
@@ -383,7 +389,7 @@ export class Synchronizer extends DurableObject<Env> {
       this.state = {
         id: this.sessionId,
         time: 0,
-        seq: 0,
+        seq: INITIAL_SEQ, // Must match original reflector - first message will be INITIAL_SEQ+1
         createdAt: startTime,
         lastActivity: startTime,
         timeline: generateTimeline(),
@@ -575,12 +581,16 @@ export class Synchronizer extends DurableObject<Env> {
 
     const sockets = this.ctx.getWebSockets()
     // Count only ACTIVE clients (have received SYNC) - matches original reflector
+    // In original reflector: activeClients = [...clients].filter(each => each.active)
     const activeClients = sockets.filter((s) => {
       const att = s.deserializeAttachment() as WSAttachment
       return att?.active === true // Only count clients that have received SYNC
     })
     const active = activeClients.length
-    const total = sockets.length
+    // In original reflector: total = clients.size (clients added to Set after SYNC)
+    // Clients in Set but not yet active are briefly between SYNC and announceUserJoined
+    // For consistency, use active count (original reflector's clients.size ≈ active count)
+    const total = active
 
     if (active === 0) return // No-one to receive the message
 
@@ -865,8 +875,8 @@ export class Synchronizer extends DurableObject<Env> {
         // Keep messages with seq > snapshotSeq for late-joiner catchup
         const msgs = this.state.messages
         if (msgs.length > 0) {
-          // Find first message to keep (seq after snapshot)
-          const firstToKeep = msgs.findIndex((msg) => (msg[1] as number) > snapshotSeq)
+          // Find first message to keep (seq after snapshot) - use wraparound-safe comparison
+          const firstToKeep = msgs.findIndex((msg) => after(snapshotSeq, msg[1] as number))
           if (firstToKeep > 0) {
             // Splice out messages before snapshot
             msgs.splice(0, firstToKeep)
@@ -943,10 +953,17 @@ export class Synchronizer extends DurableObject<Env> {
       }
 
       // Create new tally
-      const clientCount = this.ctx.getWebSockets().length
+      // Count only active clients (matches original reflector's island.clients.size)
+      // Original comment: "we could ignore clients that are not active, but with TALLY_INTERVAL of 1000ms
+      // it's painless to give them all a chance"
+      const sockets = this.ctx.getWebSockets()
+      const activeClientCount = sockets.filter((s) => {
+        const att = s.deserializeAttachment() as WSAttachment
+        return att?.active === true
+      }).length
       tally = this.state.tallies[tuttiKey] = {
         sendTime,
-        expecting: clientCount,
+        expecting: activeClientCount,
         payloads: {},
         startedAt: now(),
         wantsVote,
@@ -1193,16 +1210,32 @@ export class Synchronizer extends DurableObject<Env> {
     // Check for timed-out TUTTI tallies (matches original reflector TALLY_INTERVAL)
     this.checkTallyTimeouts()
 
-    // Tick: advance time and broadcast (official format)
+    // Tick: advance time and broadcast (matches original reflector TICK function)
+    // Only advance time if someone is listening - avoids time skew when no clients connected
     if (this.state) {
+      // Check if anyone is listening (active, connected) - matches original reflector
+      const sendingTicksTo = (ws: WebSocket): boolean => {
+        const att = ws.deserializeAttachment() as WSAttachment
+        return att?.active === true && ws.readyState === WebSocket.READY_STATE_OPEN
+      }
+      const anyoneListening = sockets.some(sendingTicksTo)
+      if (!anyoneListening) {
+        // Don't advance time if nobody hears us (matches original reflector)
+        return
+      }
+
       const time = advanceTime(this.state, 'TICK')
       this.state.lastTick = time
 
       // Check rawtime flag - if set, send raw monotonic time instead of scaled time
       // (matches original reflector behavior)
       const tickTime = this.state.flags?.rawtime ? currentTime - this.state.rawStart : time
-      const tickMsg = { id: this.sessionId, action: 'TICK', args: tickTime }
-      this.broadcast(JSON.stringify(tickMsg))
+      const tickMsg = JSON.stringify({ id: this.sessionId, action: 'TICK', args: tickTime })
+
+      // Only send to active, connected clients (matches original reflector)
+      sockets.forEach((ws) => {
+        if (sendingTicksTo(ws)) ws.send(tickMsg)
+      })
 
       // Track tick count (matches original reflector prometheusTicksCounter)
       this.metrics.ticksTotal++
