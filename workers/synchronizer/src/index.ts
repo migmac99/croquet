@@ -45,7 +45,8 @@ export default {
 
     // API key verification endpoint (for local dev / standalone mode)
     // In production, this is handled by the registry worker
-    if (url.pathname === '/clients/join') return handleClientsJoin(request, env)
+    // SDK calls /sign/join?meta=login or /join?meta=login for key validation
+    if (['/sign/join', '/clients/join', '/join'].includes(url.pathname)) return handleApiKeyValidation(request, env)
 
     // Session info endpoint
     if (url.pathname.startsWith('/session/') && request.method === 'GET') {
@@ -122,10 +123,11 @@ function extractSessionId(url: URL): string | null {
 }
 
 /**
- * Handle /clients/join - API key verification
+ * Handle API key verification (/sign/join or /clients/join)
+ * SDK calls /sign/join?meta=login for key validation
  * Validates API key using APIKEYS KV namespace
  */
-async function handleClientsJoin(request: Request, env: Env): Promise<Response> {
+async function handleApiKeyValidation(request: Request, env: Env): Promise<Response> {
   const apiKey = request.headers.get('X-Croquet-Auth')
   if (!apiKey) return errorResponse('Missing API key', 401)
 
@@ -164,13 +166,11 @@ async function handleClientsJoin(request: Request, env: Env): Promise<Response> 
     }
     env.APIKEYS.put(`key:${apiKey}`, JSON.stringify(updated))
 
-    const developerId = record.metadata?.createdBy || record.id
-    console.log(`[sync] API key verified for ${developerId}`)
-    return jsonResponse({ developerId })
+    console.log(`[sync] API key verified for ${record.id}`)
+    return jsonResponse({ success: true })
   }
 
   // Fallback - format-only validation (for local dev without KV)
   console.log(`[sync] No APIKEYS KV available, using format-only validation`)
-  const developerId = `dev@${env.CLUSTER_LABEL || 'local'}`
-  return jsonResponse({ developerId })
+  return jsonResponse({ success: true })
 }

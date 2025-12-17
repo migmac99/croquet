@@ -791,7 +791,22 @@ interface StorageKey {
   updatedAt?: number
 }
 
-export function renderStoragePage(namespaces: StorageNamespace[], recentKeys: StorageKey[], user: string, cluster: string): string {
+interface SnapshotMetrics {
+  totalSessions: number
+  totalSnapshots: number
+  totalSize: number
+  avgSnapshotsPerSession: number
+  avgSizePerSession: number
+  avgSnapshotSize: number
+}
+
+export function renderStoragePage(
+  namespaces: StorageNamespace[],
+  recentKeys: StorageKey[],
+  snapshotMetrics: SnapshotMetrics | null,
+  user: string,
+  cluster: string
+): string {
   // Calculate totals
   const totalKeys = namespaces.reduce((sum, ns) => sum + ns.keyCount, 0)
   const totalSize = namespaces.reduce((sum, ns) => sum + ns.estimatedSize, 0)
@@ -869,6 +884,45 @@ export function renderStoragePage(namespaces: StorageNamespace[], recentKeys: St
           .join('')
       : '<div class="p-10 text-center text-muted-foreground">No recent keys</div>'
 
+  // Generate snapshot statistics section
+  const snapshotStatsHtml = snapshotMetrics
+    ? `
+    <div class="card">
+      <div class="p-6 border-b border-border">
+        <h3 class="font-semibold">Snapshot Statistics</h3>
+        <p class="text-sm text-muted-foreground mt-1">R2 storage breakdown for session snapshots</p>
+      </div>
+      <div class="p-6">
+        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-6">
+          <div>
+            <div class="text-muted-foreground text-sm font-medium">Sessions with Snapshots</div>
+            <div class="text-2xl font-bold mt-1">${formatNumber(snapshotMetrics.totalSessions)}</div>
+          </div>
+          <div>
+            <div class="text-muted-foreground text-sm font-medium">Total Snapshots</div>
+            <div class="text-2xl font-bold mt-1">${formatNumber(snapshotMetrics.totalSnapshots)}</div>
+          </div>
+          <div>
+            <div class="text-muted-foreground text-sm font-medium">Total Size</div>
+            <div class="text-2xl font-bold mt-1">${formatSize(snapshotMetrics.totalSize)}</div>
+          </div>
+          <div>
+            <div class="text-muted-foreground text-sm font-medium">Avg. Snapshots/Session</div>
+            <div class="text-2xl font-bold mt-1">${snapshotMetrics.avgSnapshotsPerSession.toFixed(1)}</div>
+          </div>
+          <div>
+            <div class="text-muted-foreground text-sm font-medium">Avg. Size/Session</div>
+            <div class="text-2xl font-bold mt-1">${formatSize(snapshotMetrics.avgSizePerSession)}</div>
+          </div>
+          <div>
+            <div class="text-muted-foreground text-sm font-medium">Avg. Snapshot Size</div>
+            <div class="text-2xl font-bold mt-1">${formatSize(snapshotMetrics.avgSnapshotSize)}</div>
+          </div>
+        </div>
+      </div>
+    </div>`
+    : ''
+
   const content = render(storageTemplate, {
     total_keys: formatNumber(totalKeys),
     total_size: formatSize(totalSize),
@@ -876,6 +930,7 @@ export function renderStoragePage(namespaces: StorageNamespace[], recentKeys: St
     namespace_cards: namespaceCards,
     namespace_rows: namespaceRows,
     recent_keys: recentKeysHtml,
+    snapshot_stats: snapshotStatsHtml,
   })
 
   return renderPage({

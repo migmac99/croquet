@@ -48,34 +48,35 @@
 <!-- Legend -->
 <div class="mt-5 card p-5">
   <div class="text-sm font-medium mb-3">Legend</div>
-  <div class="flex flex-wrap gap-6 text-sm text-muted-foreground" id="legend-items">
+  <div class="flex flex-wrap gap-5 text-sm text-muted-foreground" id="legend-items">
+    <!-- Infrastructure -->
     <div class="flex items-center gap-2">
       <div class="w-3 h-3 rounded-full bg-violet-500"></div>
       <span>DO (Durable Object)</span>
     </div>
     <div class="flex items-center gap-2">
       <div class="w-4 h-4 rounded-full bg-emerald-500"></div>
-      <span>Worker (edge location)</span>
+      <span>Worker (edge)</span>
     </div>
     <div class="flex items-center gap-2">
-      <div class="w-8 h-0.5 bg-emerald-400 opacity-60" style="border-top: 2px dashed"></div>
+      <div class="w-8 h-0.5 bg-emerald-400"></div>
       <span>Worker → DO</span>
     </div>
-    <!-- Client tracking legend items (shown when tracking enabled) -->
-    <div class="flex items-center gap-2 client-legend hidden">
+    <!-- Client tracking -->
+    <div class="flex items-center gap-2">
       <div class="w-3 h-3 rounded-full bg-blue-500"></div>
-      <span>Lead user</span>
+      <span>Leader</span>
     </div>
-    <div class="flex items-center gap-2 client-legend hidden">
+    <div class="flex items-center gap-2">
       <div class="w-3 h-3 rounded-full bg-gray-400"></div>
-      <span>User (client)</span>
+      <span>Client</span>
     </div>
-    <div class="flex items-center gap-2 client-legend hidden">
-      <div class="w-8 h-0.5 bg-blue-400 opacity-60" style="border-top: 2px dashed"></div>
+    <div class="flex items-center gap-2">
+      <div class="w-8 h-0.5 bg-blue-400"></div>
       <span>Leader → DO</span>
     </div>
-    <div class="flex items-center gap-2 client-legend hidden">
-      <div class="w-8 h-0.5 bg-gray-400 opacity-50" style="border-top: 2px dashed"></div>
+    <div class="flex items-center gap-2">
+      <div class="w-8 h-0.5 bg-gray-400"></div>
       <span>Client → DO</span>
     </div>
   </div>
@@ -94,11 +95,6 @@
   // Check if client tracking is enabled
   const trackingEnabled = geoJsonData.trackingEnabled || false;
   const clientMarkers = geoJsonData.clientMarkers || [];
-
-  // Show client legend items if tracking enabled
-  if (trackingEnabled && clientMarkers.length > 0) {
-    document.querySelectorAll('.client-legend').forEach(el => el.classList.remove('hidden'));
-  }
 
   // Initialize map (zoom 1 = most zoomed out world view)
   const map = L.map('map', {

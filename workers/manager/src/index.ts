@@ -2006,19 +2006,33 @@ async function getStorageUI(env: Env, user: AuthenticatedUser): Promise<Response
     }
   }
 
+  // Snapshot metrics interface
+  interface SnapshotMetrics {
+    totalSessions: number
+    totalSnapshots: number
+    totalSize: number
+    avgSnapshotsPerSession: number
+    avgSizePerSession: number
+    avgSnapshotSize: number
+  }
+
   // Helper to scan R2 bucket (gracefully handles missing binding)
   async function scanR2Bucket(): Promise<{
     namespace: { name: string; binding: string; keyCount: number; estimatedSize: number; description: string } | null
     recentKeys: Array<{ namespace: string; key: string; size: number; updatedAt?: number }>
+    snapshotMetrics: SnapshotMetrics | null
   }> {
     // Skip if R2 bucket not configured (e.g., local dev)
     if (!env.SNAPSHOTS) {
-      return { namespace: null, recentKeys: [] }
+      return { namespace: null, recentKeys: [], snapshotMetrics: null }
     }
 
     let objectCount = 0
     let totalSize = 0
     const recentKeys: Array<{ namespace: string; key: string; size: number; updatedAt?: number }> = []
+    const sessionIds = new Set<string>()
+    const sessionSizes = new Map<string, number>() // Track total size per session
+    const sessionCounts = new Map<string, number>() // Track snapshot count per session
 
     let cursor: string | undefined
     do {
@@ -2026,6 +2040,16 @@ async function getStorageUI(env: Env, user: AuthenticatedUser): Promise<Response
       for (const obj of list.objects) {
         objectCount++
         totalSize += obj.size
+
+        // Extract session ID from key: sessions/${sessionId}/snapshots/${time}-${seq}.bin
+        const match = obj.key.match(/^sessions\/([^/]+)\/snapshots\//)
+        if (match) {
+          const sessionId = match[1]
+          sessionIds.add(sessionId)
+          sessionSizes.set(sessionId, (sessionSizes.get(sessionId) || 0) + obj.size)
+          sessionCounts.set(sessionId, (sessionCounts.get(sessionId) || 0) + 1)
+        }
+
         // Keep track of recent objects (first 5, sorted by upload time)
         if (recentKeys.length < 5) {
           recentKeys.push({
@@ -2039,6 +2063,17 @@ async function getStorageUI(env: Env, user: AuthenticatedUser): Promise<Response
       cursor = list.truncated ? list.cursor : undefined
     } while (cursor)
 
+    // Calculate snapshot metrics
+    const totalSessions = sessionIds.size
+    const snapshotMetrics: SnapshotMetrics = {
+      totalSessions,
+      totalSnapshots: objectCount,
+      totalSize,
+      avgSnapshotsPerSession: totalSessions > 0 ? Math.round((objectCount / totalSessions) * 10) / 10 : 0,
+      avgSizePerSession: totalSessions > 0 ? Math.round(totalSize / totalSessions) : 0,
+      avgSnapshotSize: objectCount > 0 ? Math.round(totalSize / objectCount) : 0,
+    }
+
     return {
       namespace: {
         name: 'Snapshots (R2)',
@@ -2048,6 +2083,7 @@ async function getStorageUI(env: Env, user: AuthenticatedUser): Promise<Response
         description: 'Session snapshots and persistent state',
       },
       recentKeys,
+      snapshotMetrics,
     }
   }
 
@@ -2082,7 +2118,7 @@ async function getStorageUI(env: Env, user: AuthenticatedUser): Promise<Response
     .sort((a, b) => b.size - a.size)
     .slice(0, 15)
 
-  return html(renderStoragePage(namespaces, recentKeys, user.email, env.CLUSTER_LABEL))
+  return html(renderStoragePage(namespaces, recentKeys, snapshotsData.snapshotMetrics, user.email, env.CLUSTER_LABEL))
 }
 
 /**
