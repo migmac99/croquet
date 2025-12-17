@@ -1,71 +1,23 @@
 import { DurableObject } from 'cloudflare:workers'
 import { CLOSE_REASONS, type Env, type SessionState, type SessionMetrics, createEmptyMetrics, recordLatency } from './types'
 import { SnapshotStorage } from './storage'
+import { now, generateTimeline, after, advanceTime, getRawTime, getScaledTime } from './time'
+import { TALLY_INTERVAL, MAX_TALLY_AGE, MAX_COMPLETED_TALLIES } from './tally'
+import { USERS_INTERVAL, INITIAL_SEQ } from './users'
+import { type ClientLocation, buildClientLocations } from './session-tracker'
 
-const DEFAULT_TICK_MS = 200 // 5 ticks per second (matches original reflector TICK_MS = 1000/5)
+// ============================================================================
+// Session Constants
+// ============================================================================
+
+const DEFAULT_TICK_MS = 200 // 5 ticks per second (matches original reflector)
 const SNAPSHOT_PRUNE_INTERVAL_MS = 300000 // 5 minutes
-const MAX_MESSAGES = 100000 // Max messages to retain since last snapshot (matches original)
-const REQU_SNAPSHOT = 60000 // Request snapshot if this many messages retained (matches original)
-const INITIAL_SEQ = 0xfffffff0 >>> 0 // 4294967280 - matches original reflector island.js
-const USERS_INTERVAL = 200 // Batch users events within 200ms (matches original reflector)
+const MAX_MESSAGES = 100000 // Max messages to retain since last snapshot
+const REQU_SNAPSHOT = 60000 // Request snapshot if this many messages retained
 const MIN_SCALE = 1 / 64 // Matches original reflector (0.015625)
 const MAX_SCALE = 64 // Matches original reflector
-const PING_THRESHOLD_MS = 35000 // Client unresponsive if no activity for this long (matches original)
-const DISCONNECT_THRESHOLD_MS = 60000 // Disconnect client if unresponsive for this long (matches original)
-const TALLY_INTERVAL = 1000 // Maximum time to wait to tally TUTTI contributions (matches original)
-const MAX_TALLY_AGE = 60000 // Don't start new tally if vote is more than this far behind (matches original)
-const MAX_COMPLETED_TALLIES = 20 // Maximum number of past tallies to remember (matches original)
-
-/** Generate a random timeline identifier for seamless rejoin support */
-function generateTimeline(): string {
-  return Math.random().toString(36).substring(2) + Math.random().toString(36).substring(2)
-}
-
-/** Get current high-resolution time (equivalent to stabilizedPerformanceNow in reflector) */
-function now(): number {
-  return Date.now()
-}
-
-/** Answer true if seqB comes after seqA (wraparound-safe for uint32) - matches original reflector */
-function after(seqA: number, seqB: number): boolean {
-  const seqDelta = (seqB - seqA) >>> 0 // make unsigned
-  return seqDelta > 0 && seqDelta < 0x80000000
-}
-
-/** Get scaled time for session (advances at session's scale rate) */
-function getScaledTime(state: SessionState): number {
-  const sinceStart = now() - state.scaledStart
-  return sinceStart * state.scale
-}
-
-/** Advance and return current integer time for session (matches original reflector) */
-function advanceTime(state: SessionState, reason?: string): number {
-  const prevTime = state.time
-  const scaledTime = Math.floor(getScaledTime(state))
-  state.time = scaledTime
-
-  // Warn about time jumps (matches original reflector)
-  const scaledAdvance = state.time - prevTime
-  if (scaledAdvance < 0 || scaledAdvance > 60000) {
-    console.warn(`[${state.id}] Time jump detected: ${scaledAdvance}ms`, {
-      event: 'time-jump',
-      scaledAdvance,
-      prevTime,
-      newTime: state.time,
-      scaledStart: state.scaledStart,
-      scale: state.scale,
-      tick: state.tick,
-      reason,
-    })
-  }
-
-  return state.time
-}
-
-/** Get raw time for session (ms since session started, matches original reflector getRawTime) */
-function getRawTime(state: SessionState): number {
-  return Math.floor(now() - state.rawStart)
-}
+const PING_THRESHOLD_MS = 35000 // Client unresponsive if no activity
+const DISCONNECT_THRESHOLD_MS = 60000 // Disconnect client if unresponsive
 
 /**
  * Croquet Protocol Message Types (official format)
@@ -1360,7 +1312,7 @@ export class Synchronizer extends DurableObject<Env> {
         lat: this.env.SYNC_LAT ? parseFloat(this.env.SYNC_LAT) : undefined,
         lon: this.env.SYNC_LON ? parseFloat(this.env.SYNC_LON) : undefined,
         region: this.env.SYNC_REGION,
-        clientLocations: this.buildClientLocations(),
+        clientLocations: this.getClientLocations(),
         createdAt: Date.now(),
         updatedAt: Date.now(),
       }
@@ -1413,7 +1365,7 @@ export class Synchronizer extends DurableObject<Env> {
         colo: this.colo,
         doColo: this.doColo,
         metrics: this.metrics,
-        clientLocations: this.buildClientLocations(),
+        clientLocations: this.getClientLocations(),
         updatedAt: Date.now(),
       }
 
@@ -1429,29 +1381,20 @@ export class Synchronizer extends DurableObject<Env> {
    * Returns array of { clientId, colo, isLeader } for each active client
    * The leader is the first client that became active (oldest joinedAt among active clients)
    */
-  private buildClientLocations(): Array<{ clientId: string; colo: string; isLeader: boolean }> {
+  private getActiveClientData(): Array<{ clientId: string; colo: string; joinedAt: number }> {
     const sockets = this.ctx.getWebSockets()
-    const activeClients: Array<{ clientId: string; colo: string; joinedAt: number }> = []
-
+    const clients: Array<{ clientId: string; colo: string; joinedAt: number }> = []
     for (const ws of sockets) {
       const att = ws.deserializeAttachment() as WSAttachment
       if (att?.active && att.colo) {
-        activeClients.push({
-          clientId: att.clientId,
-          colo: att.colo,
-          joinedAt: att.joinedAt,
-        })
+        clients.push({ clientId: att.clientId, colo: att.colo, joinedAt: att.joinedAt })
       }
     }
+    return clients
+  }
 
-    // Sort by joinedAt to determine leader (first to join and become active)
-    activeClients.sort((a, b) => a.joinedAt - b.joinedAt)
-
-    return activeClients.map((c, index) => ({
-      clientId: c.clientId,
-      colo: c.colo,
-      isLeader: index === 0, // First client is leader
-    }))
+  private getClientLocations(): ClientLocation[] {
+    return buildClientLocations(this.getActiveClientData())
   }
 
   // ============================================================================
