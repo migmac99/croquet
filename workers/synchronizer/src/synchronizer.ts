@@ -5,6 +5,8 @@ import { now, generateTimeline, after, advanceTime, getRawTime, getScaledTime } 
 import { TALLY_INTERVAL, MAX_TALLY_AGE, MAX_COMPLETED_TALLIES } from './tally'
 import { USERS_INTERVAL, INITIAL_SEQ } from './users'
 import { type ClientLocation, buildClientLocations } from './session-tracker'
+import { type IncomingMessage, type WSAttachment } from './protocol'
+import { arrayBufferToBase64, base64ToArrayBuffer, detectColoFromTrace } from './utils'
 
 // ============================================================================
 // Session Constants
@@ -20,7 +22,7 @@ const PING_THRESHOLD_MS = 35000 // Client unresponsive if no activity
 const DISCONNECT_THRESHOLD_MS = 60000 // Disconnect client if unresponsive
 
 /**
- * Croquet Protocol Message Types (official format)
+ * Croquet Protocol (see protocol.ts for full documentation)
  *
  * Client -> Server:
  *   { action: 'JOIN', args: { version, user, ... } }
@@ -33,32 +35,6 @@ const DISCONNECT_THRESHOLD_MS = 60000 // Disconnect client if unresponsive
  *   { id: sessionId, action: 'TICK', args: timestamp }
  *   { id: sessionId, action: 'PONG', args: [clientTimestamp, serverTimestamp] }
  */
-
-interface IncomingMessage {
-  action: string
-  args: unknown
-  id?: string
-  tags?: { debounce?: number; msgID?: string } // For SEND message debouncing (matches original reflector)
-}
-
-/**
- * Attachment stored with each WebSocket (survives hibernation)
- *
- * State machine (matching original reflector):
- * - joined: Client has sent JOIN message (connected to session)
- * - active: Client has received SYNC and is actively participating
- *           Only active clients are counted in USERS messages
- */
-interface WSAttachment {
-  clientId: string
-  userId?: string
-  userIp: string
-  joinedAt: number
-  lastSeen: number
-  joined: boolean
-  active: boolean // Set true AFTER SYNC sent (like original reflector's client.active)
-  colo?: string // Edge datacenter code where this client connected (e.g., 'AMS', 'FRA', 'SFO')
-}
 
 /**
  * Synchronizer Durable Object with Hibernation Support
@@ -389,7 +365,7 @@ export class Synchronizer extends DurableObject<Env> {
     }
 
     // Build snapshot URL if we have one (empty string if none, matching reflector behavior)
-    const snapshotUrl = snapshot ? `data:application/octet-stream;base64,${this.arrayBufferToBase64(snapshot)}` : ''
+    const snapshotUrl = snapshot ? `data:application/octet-stream;base64,${arrayBufferToBase64(snapshot)}` : ''
 
     // If no snapshot and persistentId provided, lookup persistent URL from registry
     // Note: persistentUrl is set ONCE at session start, never updated by SAVE (matches original reflector)
@@ -829,7 +805,7 @@ export class Synchronizer extends DurableObject<Env> {
       const snapshotSeq = seq as number
 
       try {
-        const data = this.base64ToArrayBuffer(snapshotData as string)
+        const data = base64ToArrayBuffer(snapshotData as string)
         await this.storage.save(data, snapshotTime, snapshotSeq)
 
         // Purge messages up to snapshot seq (matches original reflector behavior)
@@ -1386,62 +1362,16 @@ export class Synchronizer extends DurableObject<Env> {
     return buildClientLocations(this.getActiveClientData())
   }
 
-  // ============================================================================
-  // Utility Methods
-  // ============================================================================
-
-  // Utility: ArrayBuffer to Base64
-  private arrayBufferToBase64(buffer: ArrayBuffer): string {
-    const bytes = new Uint8Array(buffer)
-    let binary = ''
-    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i])
-    return btoa(binary)
-  }
-
-  // Utility: Base64 to ArrayBuffer
-  private base64ToArrayBuffer(base64: string): ArrayBuffer {
-    const binary = atob(base64)
-    const bytes = new Uint8Array(binary.length)
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-    return bytes.buffer
-  }
-
-  /**
-   * Detect the DO's actual location by fetching cloudflare.com/cdn-cgi/trace
-   * The colo field in the response indicates which datacenter the request exits from,
-   * which is where the DO is running.
-   *
-   * Response format:
-   * fl=123...
-   * h=cloudflare.com
-   * ip=...
-   * ...
-   * colo=SFO
-   * ...
-   */
+  /** Detect DO's actual location using Cloudflare trace endpoint */
   private async detectDoLocation(): Promise<void> {
-    // Skip if already detected or detection in progress
     if (this.doColo || this.doLocationDetectionStarted) return
     this.doLocationDetectionStarted = true
 
-    try {
-      // Use 1.1.1.1 as it's faster than cloudflare.com
-      const response = await fetch('https://1.1.1.1/cdn-cgi/trace')
-      if (!response.ok) {
-        console.error(`[${this.sessionId}] DO location detection failed: ${response.status}`)
-        return
-      }
-
-      const text = await response.text()
-      // Parse the key=value format to find colo
-      const match = text.match(/^colo=([A-Z]{3})$/m)
-      if (match) {
-        this.doColo = match[1]
-        await this.ctx.storage.put('doColo', this.doColo)
-        console.log(`[${this.sessionId}] DO location detected: ${this.doColo}`)
-      } else console.warn(`[${this.sessionId}] DO location detection: colo not found in response`)
-    } catch (err) {
-      console.error(`[${this.sessionId}] DO location detection error:`, err)
-    }
+    const colo = await detectColoFromTrace()
+    if (colo) {
+      this.doColo = colo
+      await this.ctx.storage.put('doColo', this.doColo)
+      console.log(`[${this.sessionId}] DO location detected: ${this.doColo}`)
+    } else console.warn(`[${this.sessionId}] DO location detection failed`)
   }
 }
