@@ -123,11 +123,7 @@ function extractSessionId(url: URL): string | null {
 
 /**
  * Handle /clients/join - API key verification
- * Validates API key using (in order of preference):
- * 1. Registry service binding (REGISTRY) - production
- * 2. HTTP call to REGISTRY_URL - local dev with registry running
- * 3. Direct KV lookup (APIKEYS) - standalone mode
- * 4. Format-only validation - fallback
+ * Validates API key using APIKEYS KV namespace
  */
 async function handleClientsJoin(request: Request, env: Env): Promise<Response> {
   const apiKey = request.headers.get('X-Croquet-Auth')
@@ -140,39 +136,8 @@ async function handleClientsJoin(request: Request, env: Env): Promise<Response> 
   const isValid = /^[123]/.test(apiKey)
   if (!isValid) return errorResponse('Invalid API key format', 403)
 
-  // Option 1: Use registry service binding (production)
-  if (env.REGISTRY) {
-    console.log(`[sync] Validating API key via registry service binding`)
-    const response = await env.REGISTRY.fetch(
-      new Request('https://registry/clients/join', {
-        method: 'GET',
-        headers: request.headers,
-      })
-    )
-    const data = await response.json()
-    return jsonResponse(data, response.status)
-  }
-
-  // Option 2: Call registry via HTTP (local dev)
-  if (env.REGISTRY_URL) {
-    console.log(`[sync] Validating API key via registry at ${env.REGISTRY_URL}`)
-    try {
-      const registryUrl = env.REGISTRY_URL.replace(/^ws/, 'http') // ws:// -> http://
-      const response = await fetch(`${registryUrl}/clients/join`, {
-        method: 'GET',
-        headers: request.headers,
-      })
-      const data = await response.json()
-      return jsonResponse(data, response.status)
-    } catch (err) {
-      console.error(`[sync] Registry call failed:`, err)
-      // Fall through to other options
-    }
-  }
-
-  // Option 3: Direct KV lookup (standalone mode)
+  // Validate via APIKEYS KV
   if (env.APIKEYS) {
-    console.log(`[sync] Validating API key via local APIKEYS KV`)
     const record = await env.APIKEYS.get<{
       id: string
       active: boolean
@@ -188,7 +153,7 @@ async function handleClientsJoin(request: Request, env: Env): Promise<Response> 
     const originCheck = isOriginAllowed(getOrigin(request), record.allowedDomains)
     if (!originCheck.allowed) return errorResponse(originCheck.error!, 403)
 
-    // Update usage stats (fire and forget) - matches registry behavior
+    // Update usage stats (fire and forget)
     const updated = {
       ...record,
       lastUsed: Date.now(),
@@ -204,8 +169,8 @@ async function handleClientsJoin(request: Request, env: Env): Promise<Response> 
     return jsonResponse({ developerId })
   }
 
-  // Option 4: Fallback - format-only validation (for testing)
-  console.log(`[sync] No registry available, using format-only validation`)
+  // Fallback - format-only validation (for local dev without KV)
+  console.log(`[sync] No APIKEYS KV available, using format-only validation`)
   const developerId = `dev@${env.CLUSTER_LABEL || 'local'}`
   return jsonResponse({ developerId })
 }

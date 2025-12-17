@@ -9,18 +9,6 @@
       "bucketName": "synq-snapshots",
       "createIfMissing": true
     },
-    "vars": {
-      "CLUSTER_LABEL": "alma-prod",
-      "PROTOCOL_VERSION": "v1",
-      "MAX_CLIENTS_PER_SESSION": "100",
-      "SNAPSHOT_INTERVAL_MS": "60000",
-      "SESSION_TIMEOUT_MS": "300000"
-    }
-  },
-
-  "registry": {
-    "name": "synqreg",
-    "domain": "synqreg.alma.dev",
     "kv": {
       "sessions": {
         "namespace": "synq-sessions",
@@ -29,13 +17,19 @@
       "apikeys": {
         "namespace": "synq-keys",
         "createIfMissing": true
+      },
+      "persist": {
+        "namespace": "synq-persist",
+        "createIfMissing": true
       }
     },
     "vars": {
-      "SYNCHRONIZER_URL": "wss://synq.alma.dev",
       "CLUSTER_LABEL": "alma-prod",
-      "SESSION_TTL_SECONDS": "3600",
-      "REQUIRE_API_KEY": "true"
+      "PROTOCOL_VERSION": "v1",
+      "MAX_CLIENTS_PER_SESSION": "100",
+      "SNAPSHOT_INTERVAL_MS": "60000",
+      "SESSION_TIMEOUT_MS": "300000",
+      "SESSION_TTL_SECONDS": "300"
     }
   },
 

@@ -3,11 +3,10 @@ export interface Env {
   SYNCHRONIZER: DurableObjectNamespace
   SNAPSHOTS: R2Bucket
 
-  // Optional: KV for standalone mode (local dev)
-  APIKEYS?: KVNamespace
-
-  // Optional: Registry service binding (production)
-  REGISTRY?: Fetcher
+  // KV namespaces
+  APIKEYS?: KVNamespace // API key validation
+  SESSIONS?: KVNamespace // Session tracking (for manager UI visibility)
+  PERSIST?: KVNamespace // Persistent data URLs
 
   // Config vars
   CLUSTER_LABEL: string
@@ -15,9 +14,7 @@ export interface Env {
   MAX_CLIENTS_PER_SESSION: string
   SNAPSHOT_INTERVAL_MS: string
   SESSION_TIMEOUT_MS: string
-
-  // Fallback: Registry URL for HTTP calls (when service binding not available)
-  REGISTRY_URL?: string
+  SESSION_TTL_SECONDS?: string // TTL for session records in KV (default: 300)
 
   // Location (for non-CF deployments where request.cf.colo is unavailable)
   SYNC_LAT?: string // Latitude coordinate (e.g., "37.7749")

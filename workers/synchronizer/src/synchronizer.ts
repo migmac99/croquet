@@ -129,8 +129,8 @@ export class Synchronizer extends DurableObject<Env> {
   private pendingSnapshot: { clientId: string; time: number } | null = null
   private sessionName: string | null = null // Logical session name (from URL path)
   private usersTimer: ReturnType<typeof setTimeout> | null = null // Timer for batched users events
-  private registeredWithRegistry = false // Track if we've registered with the registry
-  private lastRegistryHeartbeat = 0 // Track last heartbeat to registry
+  private trackedInKV = false // Track if we've registered session in SESSIONS KV
+  private lastSessionUpdate = 0 // Track last update to SESSIONS KV
   private colo: string | null = null // Client edge datacenter code (from request.cf.colo)
   private doColo: string | null = null // DO's actual location (detected via cdn-cgi/trace)
   private doLocationDetectionStarted = false // Prevent multiple detection attempts
@@ -300,16 +300,16 @@ export class Synchronizer extends DurableObject<Env> {
     // Check if session is now empty
     const remaining = this.ctx.getWebSockets().length
     if (remaining === 0) {
-      // Unregister from registry (removes from monitoring UI)
+      // Untrack session from KV (removes from manager UI)
       // Fire-and-forget - don't block the close handler
-      this.unregisterSession()
+      this.untrackSession()
 
       const timeoutMs = Number(this.env.SESSION_TIMEOUT_MS) || 300000
       await this.ctx.storage.setAlarm(Date.now() + timeoutMs)
-    } else if (this.registeredWithRegistry) {
-      // Update client count when clients leave (but session still has clients)
+    } else if (this.trackedInKV) {
+      // Update session tracking when clients leave (but session still has clients)
       const activeCount = this.ctx.getWebSockets().filter((s) => (s.deserializeAttachment() as WSAttachment)?.active).length
-      this.updateClientCount(activeCount)
+      this.updateSessionTracking(activeCount)
     }
   }
 
@@ -557,11 +557,11 @@ export class Synchronizer extends DurableObject<Env> {
     // Ensure ticking
     this.scheduleTick()
 
-    // Register session with registry for monitoring visibility
+    // Track session in KV for manager UI visibility
     // This is fire-and-forget - don't block the JOIN response
     const activeCount = this.ctx.getWebSockets().filter((s) => (s.deserializeAttachment() as WSAttachment)?.active).length
-    if (isEffectivelyFirstClient) this.registerSession(activeCount || 1, args.appId as string | undefined)
-    else if (this.registeredWithRegistry) this.updateClientCount(activeCount + 1) // Update client count when additional clients join, +1 because this client just became active
+    if (isEffectivelyFirstClient) this.trackSession(activeCount || 1, args.appId as string | undefined)
+    else if (this.trackedInKV) this.updateSessionTracking(activeCount + 1) // Update tracking when additional clients join, +1 because this client just became active
 
     // Debug: log session state for troubleshooting
     console.log(
@@ -1205,7 +1205,7 @@ export class Synchronizer extends DurableObject<Env> {
       console.log(`[${this.sessionId}] Session timed out, cleaning up storage`)
       await this.ctx.storage.deleteAll()
       this.state = null
-      this.registeredWithRegistry = false
+      this.trackedInKV = false
       return
     }
 
@@ -1264,9 +1264,9 @@ export class Synchronizer extends DurableObject<Env> {
       if (this.state.seq % 100 === 0) await this.ctx.storage.put('state', this.state)
     }
 
-    // Heartbeat to registry periodically (keeps session visible in UI)
-    // Registry uses TTL on session records, so we need periodic updates
-    if (this.registeredWithRegistry) this.heartbeatRegistry(sockets.length)
+    // Update session tracking periodically (keeps session visible in manager UI)
+    // Session KV records use TTL, so we need periodic updates
+    if (this.trackedInKV) this.updateSessionTracking(sockets.length)
 
     // Prune old snapshots periodically (reuse currentTime from above)
     if (this.storage && currentTime - this.lastSnapshotPrune > SNAPSHOT_PRUNE_INTERVAL_MS) {
@@ -1303,68 +1303,20 @@ export class Synchronizer extends DurableObject<Env> {
   }
 
   // ============================================================================
-  // Registry Integration - Session visibility for monitoring UI
+  // Session Tracking - Direct KV storage for manager UI visibility
   // ============================================================================
 
   /**
-   * Call registry endpoint (uses service binding or HTTP fallback)
-   * This enables session visibility in the management UI
-   */
-  private async callRegistry(endpoint: string, body: Record<string, unknown>): Promise<boolean> {
-    try {
-      const requestInit: RequestInit = {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      }
-
-      let response: Response
-
-      // Option 1: Use registry service binding (production)
-      if (this.env.REGISTRY) response = await this.env.REGISTRY.fetch(new Request(`https://registry${endpoint}`, requestInit))
-      // Option 2: HTTP call to registry URL (local dev)
-      else if (this.env.REGISTRY_URL) {
-        const registryUrl = this.env.REGISTRY_URL.replace(/^ws/, 'http')
-        response = await fetch(`${registryUrl}${endpoint}`, requestInit)
-      } else return false // No registry available - skip silently
-
-      if (!response.ok) {
-        console.error(`[${this.sessionId}] Registry ${endpoint} failed: ${response.status}`)
-        return false
-      }
-
-      return true
-    } catch (err) {
-      console.error(`[${this.sessionId}] Registry ${endpoint} error:`, err)
-      return false
-    }
-  }
-
-  /**
-   * Lookup persistent data URL from registry
+   * Lookup persistent data URL from PERSIST KV
    * Called on JOIN when persistentId is provided but no snapshot exists
    */
   private async lookupPersistentUrl(appId: string, persistentId: string): Promise<string | null> {
+    if (!this.env.PERSIST) return null
+
     try {
-      const params = new URLSearchParams({ appId, persistentId })
-      let response: Response
-
-      // Option 1: Use registry service binding (production)
-      if (this.env.REGISTRY) response = await this.env.REGISTRY.fetch(new Request(`https://registry/persist?${params}`, { method: 'GET' }))
-      // Option 2: HTTP call to registry URL (local dev)
-      else if (this.env.REGISTRY_URL) {
-        const registryUrl = this.env.REGISTRY_URL.replace(/^ws/, 'http')
-        response = await fetch(`${registryUrl}/persist?${params}`)
-      } else return null // No registry available
-
-      if (response.status === 404) return null // Not found
-      if (!response.ok) {
-        console.error(`[${this.sessionId}] Persistent data lookup failed: ${response.status}`)
-        return null
-      }
-
-      const data = (await response.json()) as { url?: string }
-      return data.url || null
+      const key = `persist:${appId}:${persistentId}`
+      const data = await this.env.PERSIST.get<{ url: string; updatedAt: number }>(key, 'json')
+      return data?.url || null
     } catch (err) {
       console.error(`[${this.sessionId}] Persistent data lookup error:`, err)
       return null
@@ -1372,32 +1324,15 @@ export class Synchronizer extends DurableObject<Env> {
   }
 
   /**
-   * Store persistent data URL to registry
+   * Store persistent data URL to PERSIST KV
    * Called on SAVE to persist URL for future sessions
    */
   private async storePersistentUrl(appId: string, persistentId: string, url: string): Promise<boolean> {
+    if (!this.env.PERSIST) return false
+
     try {
-      const requestInit: RequestInit = {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ appId, persistentId, url }),
-      }
-
-      let response: Response
-
-      // Option 1: Use registry service binding (production)
-      if (this.env.REGISTRY) response = await this.env.REGISTRY.fetch(new Request('https://registry/persist', requestInit))
-      // Option 2: HTTP call to registry URL (local dev)
-      else if (this.env.REGISTRY_URL) {
-        const registryUrl = this.env.REGISTRY_URL.replace(/^ws/, 'http')
-        response = await fetch(`${registryUrl}/persist`, requestInit)
-      } else return false // No registry available
-
-      if (!response.ok) {
-        console.error(`[${this.sessionId}] Persistent data store failed: ${response.status}`)
-        return false
-      }
-
+      const key = `persist:${appId}:${persistentId}`
+      await this.env.PERSIST.put(key, JSON.stringify({ url, updatedAt: Date.now() }))
       return true
     } catch (err) {
       console.error(`[${this.sessionId}] Persistent data store error:`, err)
@@ -1406,82 +1341,87 @@ export class Synchronizer extends DurableObject<Env> {
   }
 
   /**
-   * Register session with registry (makes it visible in UI)
+   * Track session in SESSIONS KV (makes it visible in manager UI)
    * Called when first client joins
    */
-  private async registerSession(clientCount: number, appId?: string): Promise<void> {
-    if (this.registeredWithRegistry) return
+  private async trackSession(clientCount: number, appId?: string): Promise<void> {
+    if (!this.env.SESSIONS) return
+    if (this.trackedInKV) return
 
-    const success = await this.callRegistry('/register', {
-      sessionId: this.sessionId,
-      clientCount,
-      appId,
-      synchronizerUrl: this.env.CLUSTER_LABEL || 'synq',
-      colo: this.colo, // Client edge datacenter code (e.g., 'AMS', 'FRA', 'SFO')
-      doColo: this.doColo, // DO's actual location (may be null initially, updated on heartbeat)
-      // For non-CF deployments, use env-based location
-      lat: this.env.SYNC_LAT ? parseFloat(this.env.SYNC_LAT) : undefined,
-      lon: this.env.SYNC_LON ? parseFloat(this.env.SYNC_LON) : undefined,
-      region: this.env.SYNC_REGION,
-      clientLocations: this.buildClientLocations(), // Per-client locations for map
-    })
+    try {
+      const ttl = parseInt(this.env.SESSION_TTL_SECONDS || '300', 10)
+      const record = {
+        sessionId: this.sessionId,
+        clientCount,
+        appId,
+        synchronizerUrl: this.env.CLUSTER_LABEL || 'synq',
+        colo: this.colo,
+        doColo: this.doColo,
+        lat: this.env.SYNC_LAT ? parseFloat(this.env.SYNC_LAT) : undefined,
+        lon: this.env.SYNC_LON ? parseFloat(this.env.SYNC_LON) : undefined,
+        region: this.env.SYNC_REGION,
+        clientLocations: this.buildClientLocations(),
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      }
 
-    if (success) {
-      this.registeredWithRegistry = true
-      this.lastRegistryHeartbeat = Date.now()
-      console.log(`[${this.sessionId}] Registered with registry`)
+      await this.env.SESSIONS.put(`session:${this.sessionId}`, JSON.stringify(record), { expirationTtl: ttl })
+
+      this.trackedInKV = true
+      this.lastSessionUpdate = Date.now()
+      console.log(`[${this.sessionId}] Session tracked in KV`)
+    } catch (err) {
+      console.error(`[${this.sessionId}] Session tracking error:`, err)
     }
   }
 
   /**
-   * Unregister session from registry (removes from UI)
+   * Untrack session from SESSIONS KV (removes from manager UI)
    * Called when last client leaves
    */
-  private async unregisterSession(): Promise<void> {
-    if (!this.registeredWithRegistry) return
+  private async untrackSession(): Promise<void> {
+    if (!this.env.SESSIONS) return
+    if (!this.trackedInKV) return
 
-    const success = await this.callRegistry('/unregister', { sessionId: this.sessionId })
-
-    if (success) {
-      this.registeredWithRegistry = false
-      console.log(`[${this.sessionId}] Unregistered from registry`)
+    try {
+      await this.env.SESSIONS.delete(`session:${this.sessionId}`)
+      this.trackedInKV = false
+      console.log(`[${this.sessionId}] Session untracked from KV`)
+    } catch (err) {
+      console.error(`[${this.sessionId}] Session untrack error:`, err)
     }
   }
 
   /**
-   * Send heartbeat to registry (keeps session visible)
-   * Registry uses TTL on session records, so we need periodic updates
+   * Update session in SESSIONS KV (keeps it visible with fresh TTL)
+   * Called periodically from alarm
    */
-  private async heartbeatRegistry(clientCount: number): Promise<void> {
+  private async updateSessionTracking(clientCount: number): Promise<void> {
+    if (!this.env.SESSIONS) return
+    if (!this.trackedInKV) return
+
     const HEARTBEAT_INTERVAL_MS = 60000 // 1 minute
-    const timeSinceLastHeartbeat = Date.now() - this.lastRegistryHeartbeat
+    const timeSinceLastUpdate = Date.now() - this.lastSessionUpdate
 
-    if (timeSinceLastHeartbeat < HEARTBEAT_INTERVAL_MS) return
+    if (timeSinceLastUpdate < HEARTBEAT_INTERVAL_MS) return
 
-    // Include metrics in heartbeat (matches original reflector Prometheus metrics)
-    const success = await this.callRegistry('/register', {
-      sessionId: this.sessionId,
-      clientCount,
-      colo: this.colo, // Include colo in case it wasn't sent in initial registration
-      doColo: this.doColo, // Include doColo (may have been detected after initial registration)
-      metrics: this.metrics,
-      clientLocations: this.buildClientLocations(), // Per-client locations for map
-    })
-    if (success) this.lastRegistryHeartbeat = Date.now()
-  }
+    try {
+      const ttl = parseInt(this.env.SESSION_TTL_SECONDS || '300', 10)
+      const record = {
+        sessionId: this.sessionId,
+        clientCount,
+        colo: this.colo,
+        doColo: this.doColo,
+        metrics: this.metrics,
+        clientLocations: this.buildClientLocations(),
+        updatedAt: Date.now(),
+      }
 
-  /**
-   * Update client count in registry (immediate update when clients join/leave)
-   * This keeps the UI in sync without waiting for heartbeat
-   */
-  private async updateClientCount(clientCount: number): Promise<void> {
-    if (!this.registeredWithRegistry) return
-    // Fire-and-forget - don't block the join/leave handler
-    this.callRegistry('/register', {
-      sessionId: this.sessionId,
-      clientCount,
-      clientLocations: this.buildClientLocations(),
-    })
+      await this.env.SESSIONS.put(`session:${this.sessionId}`, JSON.stringify(record), { expirationTtl: ttl })
+      this.lastSessionUpdate = Date.now()
+    } catch (err) {
+      console.error(`[${this.sessionId}] Session update error:`, err)
+    }
   }
 
   /**
