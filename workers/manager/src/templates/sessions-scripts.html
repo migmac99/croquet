@@ -90,7 +90,8 @@
       countdown--
       updateRefreshButton()
       if (countdown <= 0) {
-        location.reload()
+        refreshSessionsData()
+        countdown = 5
       }
     }, 1000)
   }
@@ -125,6 +126,143 @@
     if (btn && !isPaused) {
       btn.querySelector('span').textContent = `Refresh (${countdown}s)`
     }
+  }
+
+  // Refresh data without page reload (preserves scroll position)
+  async function refreshSessionsData() {
+    const includeR2 = document.getElementById('includeR2')?.checked
+    const url = `/api/sessions-data${includeR2 ? '?includeR2=true' : ''}`
+
+    try {
+      const res = await fetch(url)
+      if (!res.ok) throw new Error('Failed to fetch sessions')
+      const data = await res.json()
+
+      updateSessionsTable(data.sessions)
+      updateSessionsCards(data.sessions)
+    } catch (err) {
+      console.error('Refresh error:', err)
+    }
+  }
+
+  function formatTimeAgo(timestamp) {
+    if (!timestamp) return '-'
+    const now = Date.now()
+    const diff = now - timestamp
+    const seconds = Math.floor(diff / 1000)
+    const minutes = Math.floor(seconds / 60)
+    const hours = Math.floor(minutes / 60)
+    const days = Math.floor(hours / 24)
+
+    if (days > 0) return `${days}d ago`
+    if (hours > 0) return `${hours}h ago`
+    if (minutes > 0) return `${minutes}m ago`
+    return 'just now'
+  }
+
+  function getStatusBadge(session) {
+    if (session.displayStatus === 'archived') {
+      return '<span class="px-2 py-0.5 text-xs rounded bg-zinc-700 text-zinc-300">archived</span>'
+    }
+    if (session.displayStatus === 'inactive' || session.clientCount === 0) {
+      return '<span class="px-2 py-0.5 text-xs rounded bg-yellow-900/50 text-yellow-400">inactive</span>'
+    }
+    return '<span class="px-2 py-0.5 text-xs rounded bg-green-900/50 text-green-400">active</span>'
+  }
+
+  function updateSessionsTable(sessions) {
+    const tbody = document.querySelector('tbody')
+    if (!tbody) return
+
+    const currentFilter = document.getElementById('accountFilter')?.value
+
+    if (sessions.length === 0) {
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="10" class="px-6 py-12 text-center text-muted-foreground">No active sessions</td>
+        </tr>
+      `
+      return
+    }
+
+    tbody.innerHTML = sessions
+      .map((s) => {
+        const display = currentFilter && s.accountId !== currentFilter ? 'style="display: none"' : ''
+        return `
+        <tr data-account-id="${s.accountId || ''}" ${display} class="border-b border-border/50 hover:bg-secondary/30 transition-colors">
+          <td class="px-6 py-4">
+            <a href="/ui/session/${encodeURIComponent(s.sessionId)}" class="text-sm font-mono text-primary hover:underline">${truncateId(s.sessionId)}</a>
+          </td>
+          <td class="px-6 py-4">${getStatusBadge(s)}</td>
+          <td class="px-6 py-4 text-sm">${s.appId || '-'}</td>
+          <td class="px-6 py-4 text-sm">${s.apiKeyName || '-'}</td>
+          <td class="px-6 py-4 text-sm">${s.accountName || '-'}</td>
+          <td class="px-6 py-4"><span class="badge">${s.clientCount}</span></td>
+          <td class="px-6 py-4 text-sm text-muted-foreground">${s.location?.colo || '-'}</td>
+          <td class="px-6 py-4 text-sm text-muted-foreground">${formatTimeAgo(s.createdAt)}</td>
+          <td class="px-6 py-4 text-sm text-muted-foreground">${formatTimeAgo(s.lastSeen)}</td>
+          <td class="px-6 py-4">
+            <button onclick="deleteSession('${s.sessionId}')" class="btn btn-ghost btn-sm text-destructive hover:text-destructive">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+            </button>
+          </td>
+        </tr>
+      `
+      })
+      .join('')
+  }
+
+  function updateSessionsCards(sessions) {
+    const container = document.querySelector('.lg\\:hidden.space-y-5')
+    if (!container) return
+
+    const currentFilter = document.getElementById('accountFilter')?.value
+
+    if (sessions.length === 0) {
+      container.innerHTML = `
+        <div class="card p-6 text-center text-muted-foreground">No active sessions</div>
+      `
+      return
+    }
+
+    container.innerHTML = sessions
+      .map((s) => {
+        const display = currentFilter && s.accountId !== currentFilter ? 'style="display: none"' : ''
+        return `
+        <div data-account-id="${s.accountId || ''}" ${display} class="card p-5">
+          <div class="flex items-start justify-between mb-4">
+            <div>
+              <a href="/ui/session/${encodeURIComponent(s.sessionId)}" class="font-mono text-sm text-primary hover:underline">${truncateId(s.sessionId)}</a>
+              <div class="flex items-center gap-2 mt-1">
+                ${getStatusBadge(s)}
+                <span class="badge">${s.clientCount} clients</span>
+              </div>
+            </div>
+            <button onclick="deleteSession('${s.sessionId}')" class="btn btn-ghost btn-sm text-destructive">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+            </button>
+          </div>
+          <div class="grid grid-cols-2 gap-3 text-sm">
+            <div><span class="text-muted-foreground">App:</span> ${s.appId || '-'}</div>
+            <div><span class="text-muted-foreground">Key:</span> ${s.apiKeyName || '-'}</div>
+            <div><span class="text-muted-foreground">Account:</span> ${s.accountName || '-'}</div>
+            <div><span class="text-muted-foreground">Location:</span> ${s.location?.colo || '-'}</div>
+            <div><span class="text-muted-foreground">Created:</span> ${formatTimeAgo(s.createdAt)}</div>
+            <div><span class="text-muted-foreground">Last activity:</span> ${formatTimeAgo(s.lastSeen)}</div>
+          </div>
+        </div>
+      `
+      })
+      .join('')
+  }
+
+  function truncateId(id) {
+    if (!id || id.length <= 16) return id
+    return id.slice(0, 8) + '...' + id.slice(-8)
   }
 
   // Start auto-refresh on page load

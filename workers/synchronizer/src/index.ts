@@ -188,7 +188,7 @@ async function handleApiKeyValidation(request: Request, env: Env): Promise<Respo
 /**
  * List all sessions that have snapshot data in R2
  * Scans the sessions/ prefix to discover session IDs
- * Returns basic metadata for each session found
+ * Returns basic metadata for each session found, including last snapshot time
  */
 async function listR2Sessions(env: Env, url: URL): Promise<Response> {
   if (!env.SNAPSHOTS) {
@@ -211,18 +211,43 @@ async function listR2Sessions(env: Env, url: URL): Promise<Response> {
 
     // Extract unique session IDs from common prefixes
     // Common prefixes look like "sessions/{sessionId}/"
-    const sessions: Array<{ sessionId: string; prefix: string }> = []
+    const sessionPrefixes: string[] = []
 
     for (const prefix of listed.delimitedPrefixes || []) {
-      // prefix is "sessions/{sessionId}/"
       const parts = prefix.split('/')
       if (parts.length >= 2 && parts[1]) {
-        sessions.push({
-          sessionId: parts[1],
-          prefix: prefix,
-        })
+        sessionPrefixes.push(parts[1])
       }
     }
+
+    // For each session, get the most recent snapshot to determine last activity
+    const sessions = await Promise.all(
+      sessionPrefixes.map(async (sessionId) => {
+        try {
+          // List snapshots for this session, sorted by key (which includes time)
+          const snapshots = await env.SNAPSHOTS!.list({
+            prefix: `sessions/${sessionId}/snapshots/`,
+            limit: 1,
+            include: ['customMetadata'],
+          } as R2ListOptions & { include: string[] })
+
+          const latestSnapshot = snapshots.objects[0]
+          if (latestSnapshot) {
+            const createdAt = latestSnapshot.customMetadata?.createdAt ? Number(latestSnapshot.customMetadata.createdAt) : latestSnapshot.uploaded.getTime()
+
+            return {
+              sessionId,
+              lastActivity: createdAt,
+              snapshotCount: 1, // We only fetched 1, but indicates there are snapshots
+            }
+          }
+
+          return { sessionId, lastActivity: null, snapshotCount: 0 }
+        } catch {
+          return { sessionId, lastActivity: null, snapshotCount: 0 }
+        }
+      })
+    )
 
     return Response.json(
       {

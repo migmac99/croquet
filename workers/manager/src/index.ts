@@ -311,6 +311,22 @@ export default {
       if (path === '/metrics') return await getPrometheusMetrics(env) // Prometheus format
       if (path === '/api/metrics-data') return await getMetricsData(env) // JSON for UI refresh
 
+      // Sessions data endpoint (JSON for UI refresh without page reload)
+      if (path === '/api/sessions-data') {
+        const includeR2 = url.searchParams.get('includeR2') === 'true'
+        return await getSessionsData(env, includeR2)
+      }
+
+      // Synchronizers data endpoint (JSON for UI refresh without page reload)
+      if (path === '/api/synchronizers-data') {
+        return await getSynchronizersData(env)
+      }
+
+      // Storage data endpoint (JSON for UI refresh without page reload)
+      if (path === '/api/storage-data') {
+        return await getStorageData(env)
+      }
+
       // Sessions management
       if (path === '/sessions' || path === '/sessions/') {
         if (request.method === 'GET') {
@@ -1005,13 +1021,13 @@ async function listSessions(env: Env, includeR2 = false): Promise<Response> {
   } while (cursor)
 
   // 2. Optionally fetch sessions from R2 (historical sessions with snapshots)
-  let r2Sessions: Array<{ sessionId: string }> = []
+  let r2Sessions: Array<{ sessionId: string; lastActivity?: number | null }> = []
   if (includeR2 && env.SYNCHRONIZER_URL) {
     try {
       const syncUrl = env.SYNCHRONIZER_URL.replace(/^ws/, 'http')
       const r2Response = await fetch(`${syncUrl}/sessions/r2?limit=500`)
       if (r2Response.ok) {
-        const r2Data = (await r2Response.json()) as { sessions: Array<{ sessionId: string }> }
+        const r2Data = (await r2Response.json()) as { sessions: Array<{ sessionId: string; lastActivity?: number | null }> }
         r2Sessions = r2Data.sessions || []
       }
     } catch (err) {
@@ -1027,7 +1043,7 @@ async function listSessions(env: Env, includeR2 = false): Promise<Response> {
         clientCount: 0,
         status: 'archived', // Has snapshots in R2 but no KV record
         synchronizerUrl: env.SYNCHRONIZER_URL,
-        lastSeen: 0, // Unknown
+        lastSeen: r2Session.lastActivity || 0,
         createdAt: 0,
       } as SessionRecord)
       seenIds.add(r2Session.sessionId)
@@ -1514,7 +1530,7 @@ async function getSessionsUI(env: Env, user: AuthenticatedUser, includeR2 = fals
       const syncUrl = env.SYNCHRONIZER_URL.replace(/^ws/, 'http')
       const r2Response = await fetch(`${syncUrl}/sessions/r2?limit=500`)
       if (r2Response.ok) {
-        const r2Data = (await r2Response.json()) as { sessions: Array<{ sessionId: string }> }
+        const r2Data = (await r2Response.json()) as { sessions: Array<{ sessionId: string; lastActivity?: number | null }> }
         const r2Sessions = r2Data.sessions || []
 
         // Add R2-only sessions (not in KV) as "archived" entries
@@ -1525,7 +1541,7 @@ async function getSessionsUI(env: Env, user: AuthenticatedUser, includeR2 = fals
               clientCount: 0,
               status: 'archived', // Has snapshots in R2 but no KV record
               synchronizerUrl: env.SYNCHRONIZER_URL,
-              lastSeen: 0,
+              lastSeen: r2Session.lastActivity || 0,
               createdAt: 0,
             } as SessionRecord)
             seenIds.add(r2Session.sessionId)
@@ -1587,6 +1603,98 @@ async function getSessionsUI(env: Env, user: AuthenticatedUser, includeR2 = fals
   })
 
   return html(renderSessionsPage(enrichedSessions, accounts, user.email, env.CLUSTER_LABEL, includeR2))
+}
+
+/**
+ * Get sessions data as JSON for client-side refresh (preserves scroll position)
+ */
+async function getSessionsData(env: Env, includeR2 = false): Promise<Response> {
+  const sessions: SessionRecord[] = []
+  const seenIds = new Set<string>()
+
+  // 1. List sessions from KV
+  let cursor: string | undefined
+  do {
+    const result = await env.SESSIONS.list({ cursor })
+    for (const key of result.keys) {
+      const record = await env.SESSIONS.get<SessionRecord>(key.name, 'json')
+      if (record) {
+        sessions.push(record)
+        seenIds.add(record.sessionId)
+      }
+    }
+    cursor = result.list_complete ? undefined : result.cursor
+  } while (cursor)
+
+  // 2. Optionally fetch sessions from R2
+  if (includeR2 && env.SYNCHRONIZER_URL) {
+    try {
+      const syncUrl = env.SYNCHRONIZER_URL.replace(/^ws/, 'http')
+      const r2Response = await fetch(`${syncUrl}/sessions/r2?limit=500`)
+      if (r2Response.ok) {
+        const r2Data = (await r2Response.json()) as { sessions: Array<{ sessionId: string; lastActivity?: number | null }> }
+        const r2Sessions = r2Data.sessions || []
+
+        for (const r2Session of r2Sessions) {
+          if (!seenIds.has(r2Session.sessionId)) {
+            sessions.push({
+              sessionId: r2Session.sessionId,
+              clientCount: 0,
+              status: 'archived',
+              synchronizerUrl: env.SYNCHRONIZER_URL,
+              lastSeen: r2Session.lastActivity || 0,
+              createdAt: 0,
+            } as SessionRecord)
+            seenIds.add(r2Session.sessionId)
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch R2 sessions:', err)
+    }
+  }
+
+  // Sort by lastSeen descending
+  sessions.sort((a, b) => b.lastSeen - a.lastSeen)
+
+  // Build maps for enrichment
+  const apiKeyMap = new Map<string, { accountId?: string; name: string }>()
+  let keyCursor: string | undefined
+  do {
+    const result = await env.APIKEYS.list({ prefix: 'id:', cursor: keyCursor })
+    for (const key of result.keys) {
+      const record = await env.APIKEYS.get<ApiKeyRecord>(key.name, 'json')
+      if (record) apiKeyMap.set(record.id, { accountId: record.accountId, name: record.name })
+    }
+    keyCursor = result.list_complete ? undefined : result.cursor
+  } while (keyCursor)
+
+  const accountNameMap = new Map<string, string>()
+  let accountCursor: string | undefined
+  do {
+    const result = await env.ACCOUNTS.list({ prefix: 'id:', cursor: accountCursor })
+    for (const key of result.keys) {
+      const record = await env.ACCOUNTS.get<AccountRecord>(key.name, 'json')
+      if (record) accountNameMap.set(record.id, record.name)
+    }
+    accountCursor = result.list_complete ? undefined : result.cursor
+  } while (accountCursor)
+
+  // Enrich sessions
+  const enrichedSessions = sessions.map((s) => {
+    const apiKeyInfo = s.apiKeyId ? apiKeyMap.get(s.apiKeyId) : undefined
+    const accountId = s.accountId || apiKeyInfo?.accountId
+    return {
+      ...s,
+      accountId,
+      accountName: accountId ? accountNameMap.get(accountId) : undefined,
+      apiKeyName: apiKeyInfo?.name,
+      // Determine status for display
+      displayStatus: s.status === 'archived' ? 'archived' : s.clientCount > 0 ? 'active' : 'inactive',
+    }
+  })
+
+  return json({ sessions: enrichedSessions, total: enrichedSessions.length, includesR2: includeR2 })
 }
 
 async function getAccountsUI(env: Env, user: AuthenticatedUser): Promise<Response> {
@@ -1658,6 +1766,107 @@ async function getSynchronizersUI(env: Env, user: AuthenticatedUser): Promise<Re
 
   const syncList = Array.from(synchronizers.values()).sort((a, b) => b.sessionCount - a.sessionCount)
   return html(renderSynchronizersPage(syncList, user.email, env.CLUSTER_LABEL))
+}
+
+/**
+ * Get synchronizers data as JSON for client-side refresh
+ */
+async function getSynchronizersData(env: Env): Promise<Response> {
+  const synchronizers = new Map<
+    string,
+    {
+      url: string
+      label: string
+      sessionCount: number
+      clientCount: number
+      lastSeen: number
+      region?: string
+    }
+  >()
+
+  let cursor: string | undefined
+  do {
+    const list = await env.SESSIONS.list({ cursor, limit: 1000 })
+
+    for (const key of list.keys) {
+      const session = await env.SESSIONS.get<SessionRecord>(key.name, 'json')
+      if (!session) continue
+
+      const syncUrl = isValidUrl(session.synchronizerUrl) ? session.synchronizerUrl : env.SYNCHRONIZER_URL
+      const existing = synchronizers.get(syncUrl)
+
+      if (existing) {
+        existing.sessionCount++
+        existing.clientCount += session.clientCount || 0
+        existing.lastSeen = Math.max(existing.lastSeen, session.lastSeen)
+      } else {
+        const label = syncUrl.replace(/^wss?:\/\//, '').replace(/\/$/, '')
+        synchronizers.set(syncUrl, {
+          url: syncUrl,
+          label,
+          sessionCount: 1,
+          clientCount: session.clientCount || 0,
+          lastSeen: session.lastSeen,
+          region: env.CLUSTER_LABEL,
+        })
+      }
+    }
+
+    cursor = list.list_complete ? undefined : list.cursor
+  } while (cursor)
+
+  const syncList = Array.from(synchronizers.values()).sort((a, b) => b.sessionCount - a.sessionCount)
+  const totals = {
+    synchronizers: syncList.length,
+    sessions: syncList.reduce((sum, s) => sum + s.sessionCount, 0),
+    clients: syncList.reduce((sum, s) => sum + s.clientCount, 0),
+  }
+
+  return json({ synchronizers: syncList, totals })
+}
+
+/**
+ * Get storage data as JSON for client-side refresh
+ */
+async function getStorageData(env: Env): Promise<Response> {
+  const namespaces: Array<{
+    name: string
+    binding: string
+    keyCount: number
+    description: string
+  }> = []
+
+  // Count keys in each KV namespace
+  const kvBindings: Array<{ name: string; binding: string; kv: KVNamespace; description: string }> = [
+    { name: 'Sessions', binding: 'SESSIONS', kv: env.SESSIONS, description: 'Active session records' },
+    { name: 'API Keys', binding: 'APIKEYS', kv: env.APIKEYS, description: 'API key records' },
+    { name: 'Accounts', binding: 'ACCOUNTS', kv: env.ACCOUNTS, description: 'Account records' },
+  ]
+
+  let totalKeys = 0
+
+  for (const { name, binding, kv, description } of kvBindings) {
+    if (!kv) continue
+    let keyCount = 0
+    let cursor: string | undefined
+
+    do {
+      const list = await kv.list({ cursor, limit: 1000 })
+      keyCount += list.keys.length
+      cursor = list.list_complete ? undefined : list.cursor
+    } while (cursor)
+
+    namespaces.push({ name, binding, keyCount, description })
+    totalKeys += keyCount
+  }
+
+  return json({
+    namespaces,
+    totals: {
+      keys: totalKeys,
+      namespaceCount: namespaces.length,
+    },
+  })
 }
 
 // Cloudflare datacenter (colo) coordinates for map visualization

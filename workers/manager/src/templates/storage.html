@@ -7,7 +7,15 @@
       <p class="text-muted-foreground mt-1">KV namespaces and storage usage</p>
     </div>
     <div class="flex gap-3">
-      <button id="refreshBtn" onclick="location.reload()" class="btn btn-secondary">
+      <button
+        id="refreshBtn"
+        onclick="
+          refreshStorageData()
+          countdown = 5
+          updateRefreshButton()
+        "
+        class="btn btn-secondary"
+      >
         <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path
             stroke-linecap="round"
@@ -23,7 +31,12 @@
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
         <svg id="playIcon" class="w-4 h-4 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"
+          />
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
       </button>
@@ -34,17 +47,17 @@
   <div class="grid grid-cols-1 sm:grid-cols-3 gap-6">
     <div class="card p-6">
       <div class="text-muted-foreground text-sm font-medium">Total Keys</div>
-      <div class="text-3xl font-bold mt-2">{{total_keys}}</div>
+      <div class="text-3xl font-bold mt-2" id="totalKeys">{{total_keys}}</div>
       <div class="text-xs text-muted-foreground mt-1">Across all KV namespaces</div>
     </div>
     <div class="card p-6">
       <div class="text-muted-foreground text-sm font-medium">Estimated Size</div>
-      <div class="text-3xl font-bold mt-2">{{total_size}}</div>
-      <div class="text-xs text-muted-foreground mt-1">Combined KV data</div>
+      <div class="text-3xl font-bold mt-2" id="totalSize">{{total_size}}</div>
+      <div class="text-xs text-muted-foreground mt-1">Combined KV & DB data</div>
     </div>
     <div class="card p-6">
       <div class="text-muted-foreground text-sm font-medium">Namespaces</div>
-      <div class="text-3xl font-bold mt-2">{{namespace_count}}</div>
+      <div class="text-3xl font-bold mt-2" id="namespaceCount">{{namespace_count}}</div>
       <div class="text-xs text-muted-foreground mt-1">Active KV bindings</div>
     </div>
   </div>
@@ -93,10 +106,6 @@
 </div>
 
 <script>
-  function refreshStorage() {
-    location.reload()
-  }
-
   // Auto-refresh every 5 seconds
   let autoRefreshInterval = null
   let countdown = 5
@@ -109,7 +118,10 @@
     autoRefreshInterval = setInterval(() => {
       countdown--
       updateRefreshButton()
-      if (countdown <= 0) location.reload()
+      if (countdown <= 0) {
+        refreshStorageData()
+        countdown = 5
+      }
     }, 1000)
   }
 
@@ -140,6 +152,68 @@
   function updateRefreshButton() {
     const btn = document.getElementById('refreshBtn')
     if (btn && !isPaused) btn.querySelector('span').textContent = `Refresh (${countdown}s)`
+  }
+
+  // Refresh data without page reload
+  async function refreshStorageData() {
+    try {
+      const res = await fetch('/api/storage-data')
+      if (!res.ok) throw new Error('Failed to fetch storage data')
+      const data = await res.json()
+
+      // Update summary cards
+      document.getElementById('totalKeys').textContent = data.totals.keys
+      document.getElementById('namespaceCount').textContent = data.totals.namespaceCount
+
+      // Update namespace table
+      updateNamespacesTable(data.namespaces)
+      updateNamespacesCards(data.namespaces)
+    } catch (err) {
+      console.error('Refresh error:', err)
+    }
+  }
+
+  function updateNamespacesTable(namespaces) {
+    const tbody = document.querySelector('tbody')
+    if (!tbody) return
+
+    tbody.innerHTML = namespaces
+      .map(
+        (ns) => `
+      <tr class="border-b border-border/50 hover:bg-secondary/30 transition-colors">
+        <td class="px-6 py-4">
+          <div class="font-medium">${ns.name}</div>
+          <div class="text-xs text-muted-foreground font-mono">${ns.binding}</div>
+        </td>
+        <td class="px-6 py-4"><span class="badge">${ns.keyCount}</span></td>
+        <td class="px-6 py-4 text-sm text-muted-foreground">-</td>
+        <td class="px-6 py-4 text-sm text-muted-foreground">${ns.description}</td>
+      </tr>
+    `
+      )
+      .join('')
+  }
+
+  function updateNamespacesCards(namespaces) {
+    const container = document.querySelector('.lg\\:hidden.p-4.space-y-4')
+    if (!container) return
+
+    container.innerHTML = namespaces
+      .map(
+        (ns) => `
+      <div class="p-4 bg-secondary/30 rounded-lg">
+        <div class="flex items-start justify-between mb-2">
+          <div>
+            <div class="font-medium">${ns.name}</div>
+            <div class="text-xs text-muted-foreground font-mono">${ns.binding}</div>
+          </div>
+          <span class="badge">${ns.keyCount} keys</span>
+        </div>
+        <div class="text-sm text-muted-foreground">${ns.description}</div>
+      </div>
+    `
+      )
+      .join('')
   }
 
   document.addEventListener('DOMContentLoaded', startAutoRefresh)

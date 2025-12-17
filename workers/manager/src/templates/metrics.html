@@ -7,7 +7,15 @@
       <p class="text-muted-foreground mt-1">Prometheus-compatible infrastructure metrics</p>
     </div>
     <div class="flex gap-3">
-      <button id="refreshBtn" onclick="location.reload()" class="btn btn-secondary">
+      <button
+        id="refreshBtn"
+        onclick="
+          refreshMetrics()
+          countdown = 5
+          updateRefreshButton()
+        "
+        class="btn btn-secondary"
+      >
         <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path
             stroke-linecap="round"
@@ -23,7 +31,12 @@
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
         <svg id="playIcon" class="w-4 h-4 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"
+          />
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
       </button>
@@ -149,7 +162,10 @@
     autoRefreshInterval = setInterval(() => {
       countdown--
       updateRefreshButton()
-      if (countdown <= 0) location.reload()
+      if (countdown <= 0) {
+        refreshMetrics()
+        countdown = 5
+      }
     }, 1000)
   }
 

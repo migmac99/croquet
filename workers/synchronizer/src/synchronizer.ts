@@ -1529,7 +1529,7 @@ export class Synchronizer extends DurableObject<Env> {
     return {
       sessionId: this.sessionId,
       sessionName: this.sessionName,
-      status: this.state ? 'active' : (snapshotInfo ? 'inactive' : 'uninitialized'),
+      status: this.state ? 'active' : snapshotInfo ? 'inactive' : 'uninitialized',
       location: {
         edge: this.colo,
         durable: this.doColo,

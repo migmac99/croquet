@@ -1098,7 +1098,10 @@ export function renderSessionInspectorPage(data: SessionInspectorData, user: str
         </div>
         <div class="p-5 space-y-2">
           ${Object.entries(data.flags)
-            .map(([key, value]) => `<div class="flex justify-between"><span class="text-muted-foreground">${escapeHtml(key)}</span><span class="font-mono text-sm">${escapeHtml(String(value))}</span></div>`)
+            .map(
+              ([key, value]) =>
+                `<div class="flex justify-between"><span class="text-muted-foreground">${escapeHtml(key)}</span><span class="font-mono text-sm">${escapeHtml(String(value))}</span></div>`
+            )
             .join('')}
         </div>
       </div>`

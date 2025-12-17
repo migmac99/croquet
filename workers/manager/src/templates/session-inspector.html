@@ -12,12 +12,23 @@
         <h2 class="text-2xl font-bold">Session Inspector</h2>
         <span class="badge {{status_badge}}">{{status}}</span>
       </div>
-      <div class="font-mono text-sm text-muted-foreground cursor-pointer hover:text-foreground transition-colors" onclick="copyToClipboard('{{session_id}}', 'Session ID')" title="Click to copy">{{session_id}}</div>
+      <div
+        class="font-mono text-sm text-muted-foreground cursor-pointer hover:text-foreground transition-colors"
+        onclick="copyToClipboard('{{session_id}}', 'Session ID')"
+        title="Click to copy"
+      >
+        {{session_id}}
+      </div>
     </div>
     <div class="flex gap-3">
       <button id="refreshBtn" onclick="location.reload()" class="btn btn-secondary">
         <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+          />
         </svg>
         <span>Refresh (5s)</span>
       </button>
@@ -26,7 +37,12 @@
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
         <svg id="playIcon" class="w-4 h-4 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"
+          />
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
       </button>
@@ -160,9 +176,7 @@
         <div class="p-5 border-b border-border">
           <h3 class="font-semibold">Connected Clients ({{client_count}})</h3>
         </div>
-        <div class="divide-y divide-border">
-          {{client_rows}}
-        </div>
+        <div class="divide-y divide-border">{{client_rows}}</div>
       </div>
 
       <!-- Snapshots -->
@@ -171,13 +185,16 @@
           <h3 class="font-semibold">Snapshots ({{snapshot_count}})</h3>
           <button onclick="refreshSnapshots()" class="btn btn-ghost btn-sm">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+              />
             </svg>
           </button>
         </div>
-        <div class="divide-y divide-border" id="snapshots-list">
-          {{snapshot_rows}}
-        </div>
+        <div class="divide-y divide-border" id="snapshots-list">{{snapshot_rows}}</div>
       </div>
 
       <!-- Flags -->
@@ -235,18 +252,20 @@
   document.addEventListener('DOMContentLoaded', startAutoRefresh)
 
   function refreshSession() {
-    location.reload();
+    location.reload()
   }
 
   async function refreshSnapshots() {
     try {
-      const res = await fetch('{{sync_url}}/session/{{session_id_encoded}}/snapshots');
-      if (!res.ok) throw new Error('Failed to fetch snapshots');
-      const data = await res.json();
+      const res = await fetch('{{sync_url}}/session/{{session_id_encoded}}/snapshots')
+      if (!res.ok) throw new Error('Failed to fetch snapshots')
+      const data = await res.json()
 
-      const container = document.getElementById('snapshots-list');
+      const container = document.getElementById('snapshots-list')
       if (data.snapshots && data.snapshots.length > 0) {
-        container.innerHTML = data.snapshots.map(s => `
+        container.innerHTML = data.snapshots
+          .map(
+            (s) => `
           <div class="p-4 hover:bg-secondary/30 transition-colors">
             <div class="flex items-center justify-between">
               <div>
@@ -256,13 +275,15 @@
               <span class="badge">${s.sizeHuman}</span>
             </div>
           </div>
-        `).join('');
+        `
+          )
+          .join('')
       } else {
-        container.innerHTML = '<div class="p-6 text-center text-muted-foreground">No snapshots stored</div>';
+        container.innerHTML = '<div class="p-6 text-center text-muted-foreground">No snapshots stored</div>'
       }
-      showToast('Snapshots refreshed');
+      showToast('Snapshots refreshed')
     } catch (err) {
-      showToast('Error: ' + err.message);
+      showToast('Error: ' + err.message)
     }
   }
 
@@ -271,22 +292,22 @@
       title: 'End Session',
       confirmText: 'End Session',
       danger: true,
-    });
-    if (!confirmed) return;
+    })
+    if (!confirmed) return
 
     try {
-      const res = await fetch('/sessions/' + encodeURIComponent(sessionId), { method: 'DELETE' });
-      if (!res.ok) throw new Error(await res.text());
-      showToast('Session ended');
-      setTimeout(() => window.location.href = '/ui/sessions', 1000);
+      const res = await fetch('/sessions/' + encodeURIComponent(sessionId), { method: 'DELETE' })
+      if (!res.ok) throw new Error(await res.text())
+      showToast('Session ended')
+      setTimeout(() => (window.location.href = '/ui/sessions'), 1000)
     } catch (err) {
-      showToast('Error: ' + err.message);
+      showToast('Error: ' + err.message)
     }
   }
 
   function copyToClipboard(text, label) {
     navigator.clipboard.writeText(text).then(() => {
-      showToast(label + ' copied to clipboard');
-    });
+      showToast(label + ' copied to clipboard')
+    })
   }
 </script>

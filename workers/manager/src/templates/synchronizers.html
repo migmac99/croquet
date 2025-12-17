@@ -4,7 +4,15 @@
     <p class="text-sm sm:text-base text-muted-foreground mt-2">Active synchronizer instances and their workloads</p>
   </div>
   <div class="flex gap-3">
-    <button id="refreshBtn" onclick="location.reload()" class="btn btn-secondary">
+    <button
+      id="refreshBtn"
+      onclick="
+        refreshSynchronizers()
+        countdown = 5
+        updateRefreshButton()
+      "
+      class="btn btn-secondary"
+    >
       <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path
           stroke-linecap="round"
@@ -20,7 +28,12 @@
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
       </svg>
       <svg id="playIcon" class="w-4 h-4 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"
+        />
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
       </svg>
     </button>
@@ -42,15 +55,15 @@
 <div class="grid grid-cols-1 sm:grid-cols-3 gap-5 mb-10">
   <div class="card p-6">
     <div class="text-sm text-muted-foreground mb-1">Total Synchronizers</div>
-    <div class="text-3xl font-bold">{{total_synchronizers}}</div>
+    <div class="text-3xl font-bold" id="totalSynchronizers">{{total_synchronizers}}</div>
   </div>
   <div class="card p-6">
     <div class="text-sm text-muted-foreground mb-1">Total Sessions</div>
-    <div class="text-3xl font-bold">{{total_sessions}}</div>
+    <div class="text-3xl font-bold" id="totalSessions">{{total_sessions}}</div>
   </div>
   <div class="card p-6">
     <div class="text-sm text-muted-foreground mb-1">Total Clients</div>
-    <div class="text-3xl font-bold">{{total_clients}}</div>
+    <div class="text-3xl font-bold" id="totalClients">{{total_clients}}</div>
   </div>
 </div>
 
@@ -91,7 +104,10 @@
     autoRefreshInterval = setInterval(() => {
       countdown--
       updateRefreshButton()
-      if (countdown <= 0) location.reload()
+      if (countdown <= 0) {
+        refreshSynchronizers()
+        countdown = 5
+      }
     }, 1000)
   }
 
@@ -122,6 +138,109 @@
   function updateRefreshButton() {
     const btn = document.getElementById('refreshBtn')
     if (btn && !isPaused) btn.querySelector('span').textContent = `Refresh (${countdown}s)`
+  }
+
+  // Refresh data without page reload
+  async function refreshSynchronizers() {
+    try {
+      const res = await fetch('/api/synchronizers-data')
+      if (!res.ok) throw new Error('Failed to fetch synchronizers')
+      const data = await res.json()
+
+      // Update summary cards
+      document.getElementById('totalSynchronizers').textContent = data.totals.synchronizers
+      document.getElementById('totalSessions').textContent = data.totals.sessions
+      document.getElementById('totalClients').textContent = data.totals.clients
+
+      // Update table
+      updateSynchronizersTable(data.synchronizers)
+      updateSynchronizersCards(data.synchronizers)
+    } catch (err) {
+      console.error('Refresh error:', err)
+    }
+  }
+
+  function formatTimeAgo(timestamp) {
+    if (!timestamp) return '-'
+    const now = Date.now()
+    const diff = now - timestamp
+    const seconds = Math.floor(diff / 1000)
+    const minutes = Math.floor(seconds / 60)
+    const hours = Math.floor(minutes / 60)
+    const days = Math.floor(hours / 24)
+
+    if (days > 0) return `${days}d ago`
+    if (hours > 0) return `${hours}h ago`
+    if (minutes > 0) return `${minutes}m ago`
+    return 'just now'
+  }
+
+  function updateSynchronizersTable(synchronizers) {
+    const tbody = document.querySelector('tbody')
+    if (!tbody) return
+
+    if (synchronizers.length === 0) {
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="6" class="px-6 py-12 text-center text-muted-foreground">No synchronizers found</td>
+        </tr>
+      `
+      return
+    }
+
+    tbody.innerHTML = synchronizers
+      .map(
+        (s) => `
+      <tr class="border-b border-border/50 hover:bg-secondary/30 transition-colors">
+        <td class="px-6 py-4">
+          <div class="font-medium">${s.label}</div>
+          <div class="text-xs text-muted-foreground font-mono">${s.url}</div>
+        </td>
+        <td class="px-6 py-4 text-sm">${s.region || '-'}</td>
+        <td class="px-6 py-4"><span class="badge">${s.sessionCount}</span></td>
+        <td class="px-6 py-4"><span class="badge">${s.clientCount}</span></td>
+        <td class="px-6 py-4 text-sm text-muted-foreground">${formatTimeAgo(s.lastSeen)}</td>
+        <td class="px-6 py-4">
+          <span class="px-2 py-1 text-xs rounded-full bg-green-900/50 text-green-400">active</span>
+        </td>
+      </tr>
+    `
+      )
+      .join('')
+  }
+
+  function updateSynchronizersCards(synchronizers) {
+    const container = document.querySelector('.lg\\:hidden.space-y-5')
+    if (!container) return
+
+    if (synchronizers.length === 0) {
+      container.innerHTML = `
+        <div class="card p-6 text-center text-muted-foreground">No synchronizers found</div>
+      `
+      return
+    }
+
+    container.innerHTML = synchronizers
+      .map(
+        (s) => `
+      <div class="card p-5">
+        <div class="flex items-start justify-between mb-4">
+          <div>
+            <div class="font-medium">${s.label}</div>
+            <div class="text-xs text-muted-foreground font-mono mt-1">${s.url}</div>
+          </div>
+          <span class="px-2 py-1 text-xs rounded-full bg-green-900/50 text-green-400">active</span>
+        </div>
+        <div class="grid grid-cols-2 gap-3 text-sm">
+          <div><span class="text-muted-foreground">Region:</span> ${s.region || '-'}</div>
+          <div><span class="text-muted-foreground">Sessions:</span> ${s.sessionCount}</div>
+          <div><span class="text-muted-foreground">Clients:</span> ${s.clientCount}</div>
+          <div><span class="text-muted-foreground">Last activity:</span> ${formatTimeAgo(s.lastSeen)}</div>
+        </div>
+      </div>
+    `
+      )
+      .join('')
   }
 
   document.addEventListener('DOMContentLoaded', startAutoRefresh)
