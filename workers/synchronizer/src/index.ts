@@ -48,6 +48,12 @@ export default {
     // SDK calls /sign/join?meta=login or /join?meta=login for key validation
     if (['/sign/join', '/clients/join', '/join'].includes(url.pathname)) return handleApiKeyValidation(request, env)
 
+    // List all sessions with snapshots in R2 (for manager discovery)
+    // This finds sessions that have snapshot data even if they're not tracked in KV
+    if (url.pathname === '/sessions/r2' && request.method === 'GET') {
+      return listR2Sessions(env, url)
+    }
+
     // Session info endpoints: /session/{id}, /session/{id}/info, /session/{id}/snapshots
     if (url.pathname.startsWith('/session/') && request.method === 'GET') {
       const parts = url.pathname.split('/').filter(Boolean) // ['session', '{id}', 'info'?]
@@ -177,4 +183,57 @@ async function handleApiKeyValidation(request: Request, env: Env): Promise<Respo
   // Fallback - format-only validation (for local dev without KV)
   console.log(`[sync] No APIKEYS KV available, using format-only validation`)
   return jsonResponse({ success: true })
+}
+
+/**
+ * List all sessions that have snapshot data in R2
+ * Scans the sessions/ prefix to discover session IDs
+ * Returns basic metadata for each session found
+ */
+async function listR2Sessions(env: Env, url: URL): Promise<Response> {
+  if (!env.SNAPSHOTS) {
+    return jsonResponse({ sessions: [], error: 'No R2 bucket configured' })
+  }
+
+  const limit = parseInt(url.searchParams.get('limit') || '100', 10)
+  const cursor = url.searchParams.get('cursor') || undefined
+
+  try {
+    // List all objects under sessions/ prefix with delimiter to get unique session IDs
+    // R2 path format: sessions/{sessionId}/snapshots/{time}-{seq}.bin
+    // Using delimiter '/' at depth 2 gives us unique session prefixes
+    const listed = await env.SNAPSHOTS.list({
+      prefix: 'sessions/',
+      delimiter: '/',
+      limit: limit,
+      cursor,
+    })
+
+    // Extract unique session IDs from common prefixes
+    // Common prefixes look like "sessions/{sessionId}/"
+    const sessions: Array<{ sessionId: string; prefix: string }> = []
+
+    for (const prefix of listed.delimitedPrefixes || []) {
+      // prefix is "sessions/{sessionId}/"
+      const parts = prefix.split('/')
+      if (parts.length >= 2 && parts[1]) {
+        sessions.push({
+          sessionId: parts[1],
+          prefix: prefix,
+        })
+      }
+    }
+
+    return Response.json(
+      {
+        sessions,
+        truncated: listed.truncated,
+        cursor: listed.truncated ? listed.cursor : undefined,
+      },
+      { headers: corsHeaders() }
+    )
+  } catch (err) {
+    console.error('[sync] R2 session list error:', err)
+    return jsonResponse({ sessions: [], error: 'Failed to list R2 sessions' })
+  }
 }

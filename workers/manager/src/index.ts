@@ -313,7 +313,10 @@ export default {
 
       // Sessions management
       if (path === '/sessions' || path === '/sessions/') {
-        if (request.method === 'GET') return await listSessions(env)
+        if (request.method === 'GET') {
+          const includeR2 = url.searchParams.get('includeR2') === 'true'
+          return await listSessions(env, includeR2)
+        }
       }
 
       // Purge all sessions
@@ -983,23 +986,58 @@ function text(content: string, status = 200): Response {
 // Session Handlers
 // ============================================================================
 
-async function listSessions(env: Env): Promise<Response> {
+async function listSessions(env: Env, includeR2 = false): Promise<Response> {
   const sessions: SessionRecord[] = []
+  const seenIds = new Set<string>()
   let cursor: string | undefined
 
+  // 1. List sessions from KV (active + recently inactive)
   do {
     const result = await env.SESSIONS.list({ cursor })
     for (const key of result.keys) {
       const record = await env.SESSIONS.get<SessionRecord>(key.name, 'json')
-      if (record) sessions.push(record)
+      if (record) {
+        sessions.push(record)
+        seenIds.add(record.sessionId)
+      }
     }
     cursor = result.list_complete ? undefined : result.cursor
   } while (cursor)
 
-  // Sort by lastSeen descending
+  // 2. Optionally fetch sessions from R2 (historical sessions with snapshots)
+  let r2Sessions: Array<{ sessionId: string }> = []
+  if (includeR2 && env.SYNCHRONIZER_URL) {
+    try {
+      const syncUrl = env.SYNCHRONIZER_URL.replace(/^ws/, 'http')
+      const r2Response = await fetch(`${syncUrl}/sessions/r2?limit=500`)
+      if (r2Response.ok) {
+        const r2Data = (await r2Response.json()) as { sessions: Array<{ sessionId: string }> }
+        r2Sessions = r2Data.sessions || []
+      }
+    } catch (err) {
+      console.error('Failed to fetch R2 sessions:', err)
+    }
+  }
+
+  // 3. Add R2-only sessions (not in KV) as "archived" entries
+  for (const r2Session of r2Sessions) {
+    if (!seenIds.has(r2Session.sessionId)) {
+      sessions.push({
+        sessionId: r2Session.sessionId,
+        clientCount: 0,
+        status: 'archived', // Has snapshots in R2 but no KV record
+        synchronizerUrl: env.SYNCHRONIZER_URL,
+        lastSeen: 0, // Unknown
+        createdAt: 0,
+      } as SessionRecord)
+      seenIds.add(r2Session.sessionId)
+    }
+  }
+
+  // Sort by lastSeen descending (archived sessions will be at the end)
   sessions.sort((a, b) => b.lastSeen - a.lastSeen)
 
-  return json({ sessions, total: sessions.length })
+  return json({ sessions, total: sessions.length, includesR2: includeR2 })
 }
 
 async function getSession(sessionId: string, env: Env): Promise<Response> {

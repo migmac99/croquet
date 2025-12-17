@@ -130,6 +130,10 @@ export class Synchronizer extends DurableObject<Env> {
     // Detailed session info (for inspector/debugging)
     if (url.pathname.endsWith('/info')) {
       try {
+        // Ensure storage is available for inactive session queries
+        if (!this.storage && this.env.SNAPSHOTS) {
+          this.storage = new SnapshotStorage(this.env.SNAPSHOTS, this.sessionId)
+        }
         return Response.json(await this.getSessionInfo())
       } catch (err) {
         console.error('[sync] Error getting session info:', err)
@@ -140,6 +144,10 @@ export class Synchronizer extends DurableObject<Env> {
     // List snapshots for this session
     if (url.pathname.endsWith('/snapshots')) {
       try {
+        // Ensure storage is available for inactive session queries
+        if (!this.storage && this.env.SNAPSHOTS) {
+          this.storage = new SnapshotStorage(this.env.SNAPSHOTS, this.sessionId)
+        }
         return Response.json(await this.getSnapshotList())
       } catch (err) {
         console.error('[sync] Error getting snapshots:', err)
@@ -427,6 +435,10 @@ export class Synchronizer extends DurableObject<Env> {
         // Recalculate scaledStart so future advanceTime() continues from snapshotTime
         // Formula: time = (now - scaledStart) * scale => scaledStart = now - time/scale
         this.state.scaledStart = now() - snapshotTime / this.state.scale
+        // Also restore snapshot metadata for manager UI display
+        this.state.snapshotTime = snapshotTime
+        this.state.snapshotSeq = snapshotSeq
+        this.state.snapshotUrl = `snapshot:${snapshotSeq}`
       }
 
       // Clear any pending users batch (stale from previous session)
@@ -1164,8 +1176,13 @@ export class Synchronizer extends DurableObject<Env> {
       // No clients - session timed out, clean up storage to free resources
       // Snapshots are kept in R2 for potential recovery
       console.log(`[${this.sessionId}] Session timed out, cleaning up storage`)
-      await this.untrackSession() // Remove from KV before deleting state
+      await this.markSessionInactive() // Mark as inactive (TTL will eventually expire)
+      // Preserve sessionName so future info queries can find R2 snapshots
+      const preserveSessionName = this.sessionName
       await this.ctx.storage.deleteAll()
+      if (preserveSessionName) {
+        await this.ctx.storage.put('sessionName', preserveSessionName)
+      }
       this.state = null
       return
     }
@@ -1338,8 +1355,43 @@ export class Synchronizer extends DurableObject<Env> {
   }
 
   /**
-   * Untrack session from SESSIONS KV (removes from manager UI)
+   * Mark session as inactive in SESSIONS KV (but don't delete)
+   * Session remains visible in manager UI until TTL expires
    * Called when last client leaves
+   */
+  private async markSessionInactive(): Promise<void> {
+    if (!this.env.SESSIONS) return
+    if (!this.trackedInKV) return
+
+    try {
+      const ttl = parseInt(this.env.SESSION_TTL_SECONDS || '300', 10)
+      const record = {
+        sessionId: this.sessionId,
+        clientCount: 0,
+        status: 'inactive', // Mark as inactive instead of deleting
+        appId: this.trackedAppId,
+        synchronizerUrl: this.env.CLUSTER_LABEL || 'synq',
+        colo: this.colo,
+        doColo: this.doColo,
+        lat: this.env.SYNC_LAT ? parseFloat(this.env.SYNC_LAT) : undefined,
+        lon: this.env.SYNC_LON ? parseFloat(this.env.SYNC_LON) : undefined,
+        region: this.env.SYNC_REGION,
+        metrics: this.metrics,
+        hasSnapshot: !!this.state?.snapshotUrl,
+        lastSeen: Date.now(),
+        inactiveSince: Date.now(),
+      }
+
+      await this.env.SESSIONS.put(`session:${this.sessionId}`, JSON.stringify(record), { expirationTtl: ttl })
+      console.log(`[${this.sessionId}] Session marked inactive in KV (TTL: ${ttl}s)`)
+    } catch (err) {
+      console.error(`[${this.sessionId}] Session inactive marking error:`, err)
+    }
+  }
+
+  /**
+   * Untrack session from SESSIONS KV (removes from manager UI)
+   * Called for explicit deletion
    */
   private async untrackSession(): Promise<void> {
     if (!this.env.SESSIONS) return
@@ -1423,6 +1475,7 @@ export class Synchronizer extends DurableObject<Env> {
   /**
    * Get detailed session info for inspector/debugging
    * Returns comprehensive session state, client info, and metrics
+   * Note: Even when session is inactive (state=null), snapshots may still exist in R2
    */
   private async getSessionInfo(): Promise<Record<string, unknown>> {
     const sockets = this.ctx.getWebSockets()
@@ -1447,10 +1500,36 @@ export class Synchronizer extends DurableObject<Env> {
     clients.sort((a, b) => (a.joinedAt as number) - (b.joinedAt as number))
     if (clients.length > 0) clients[0].isLeader = true
 
+    // Get snapshot info - from state if active, or from R2 if inactive
+    let snapshotInfo: Record<string, unknown> | null = null
+    if (this.state) {
+      snapshotInfo = {
+        time: this.state.snapshotTime,
+        seq: this.state.snapshotSeq,
+        url: this.state.snapshotUrl ? 'present' : null,
+        persistentUrl: this.state.persistentUrl ? 'present' : null,
+      }
+    } else if (this.storage) {
+      // Session inactive but snapshots may exist in R2
+      try {
+        const latest = await this.storage.loadLatest()
+        if (latest) {
+          snapshotInfo = {
+            time: latest.meta.time,
+            seq: latest.meta.seq,
+            url: 'present (from R2)',
+            persistentUrl: null,
+          }
+        }
+      } catch {
+        // Ignore errors loading snapshot for inactive session
+      }
+    }
+
     return {
       sessionId: this.sessionId,
       sessionName: this.sessionName,
-      status: this.state ? 'active' : 'uninitialized',
+      status: this.state ? 'active' : (snapshotInfo ? 'inactive' : 'uninitialized'),
       location: {
         edge: this.colo,
         durable: this.doColo,
@@ -1467,14 +1546,7 @@ export class Synchronizer extends DurableObject<Env> {
             lastMsgTime: this.state.lastMsgTime,
           }
         : null,
-      snapshot: this.state
-        ? {
-            time: this.state.snapshotTime,
-            seq: this.state.snapshotSeq,
-            url: this.state.snapshotUrl ? 'present' : null,
-            persistentUrl: this.state.persistentUrl ? 'present' : null,
-          }
-        : null,
+      snapshot: snapshotInfo,
       messages: {
         buffered: this.state?.messages?.length || 0,
         maxBuffer: MAX_MESSAGES,
