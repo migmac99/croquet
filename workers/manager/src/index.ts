@@ -1233,6 +1233,12 @@ async function getSetting(key: string, env: Env): Promise<Response> {
       },
       require_api_key: { key: 'require_api_key', value: true, description: 'Require API key for session creation', lastModified: 0 },
       max_sessions_per_synchronizer: { key: 'max_sessions_per_synchronizer', value: 1000, description: 'Maximum sessions per synchronizer', lastModified: 0 },
+      track_client_locations: {
+        key: 'track_client_locations',
+        value: false,
+        description: 'Track individual client connection locations for map display',
+        lastModified: 0,
+      },
     }
     const defaultRecord = defaults[key as SettingKey]
     if (defaultRecord) return json(defaultRecord)
@@ -1385,8 +1391,8 @@ async function getSessionsUI(env: Env, user: AuthenticatedUser): Promise<Respons
   // Sort by lastSeen descending
   sessions.sort((a, b) => b.lastSeen - a.lastSeen)
 
-  // Build a map of apiKeyId -> accountId by looking up keys
-  const apiKeyAccountMap = new Map<string, { accountId?: string; accountName?: string }>()
+  // Build a map of apiKeyId -> { accountId, name } by looking up keys
+  const apiKeyMap = new Map<string, { accountId?: string; name: string }>()
 
   // Fetch all API keys to build the map
   let keyCursor: string | undefined
@@ -1394,7 +1400,7 @@ async function getSessionsUI(env: Env, user: AuthenticatedUser): Promise<Respons
     const result = await env.APIKEYS.list({ prefix: 'id:', cursor: keyCursor })
     for (const key of result.keys) {
       const record = await env.APIKEYS.get<ApiKeyRecord>(key.name, 'json')
-      if (record && record.accountId) apiKeyAccountMap.set(record.id, { accountId: record.accountId })
+      if (record) apiKeyMap.set(record.id, { accountId: record.accountId, name: record.name })
     }
     keyCursor = result.list_complete ? undefined : result.cursor
   } while (keyCursor)
@@ -1418,14 +1424,16 @@ async function getSessionsUI(env: Env, user: AuthenticatedUser): Promise<Respons
   // Sort accounts by name
   accounts.sort((a, b) => a.name.localeCompare(b.name))
 
-  // Enrich sessions with account info
+  // Enrich sessions with account info and API key name
   // Use accountId directly from session if available (new sessions), otherwise fall back to API key lookup (legacy)
   const enrichedSessions = sessions.map((s) => {
-    const accountId = s.accountId || (s.apiKeyId ? apiKeyAccountMap.get(s.apiKeyId)?.accountId : undefined)
+    const apiKeyInfo = s.apiKeyId ? apiKeyMap.get(s.apiKeyId) : undefined
+    const accountId = s.accountId || apiKeyInfo?.accountId
     return {
       ...s,
       accountId,
       accountName: accountId ? accountNameMap.get(accountId) : undefined,
+      apiKeyName: apiKeyInfo?.name,
     }
   })
 
@@ -1571,24 +1579,39 @@ const COLO_LOCATIONS: Record<string, { region: string; lat: number; lon: number 
 }
 
 async function getMapUI(env: Env, user: AuthenticatedUser): Promise<Response> {
-  // Aggregate sessions by synchronizer URL directly from SESSIONS KV
-  const synchronizers = new Map<
+  // Check if client location tracking is enabled
+  const trackSetting = await env.SETTINGS.get<SettingsRecord>('setting:track_client_locations', 'json')
+  const trackClientLocations = trackSetting?.value === true
+
+  // Aggregate sessions by edge location (colo) to show where clients are connecting from
+  // Each colo gets a marker, with lines connecting to the DO locations
+  const edgeLocations = new Map<
     string,
     {
-      url: string
-      label: string
+      colo: string // Edge datacenter code
+      region: string
+      lat: number
+      lon: number
       sessionCount: number
       clientCount: number
       lastSeen: number
-      colo?: string // Client edge location
-      doColo?: string // DO's actual location
-      region?: string
-      lat?: number // Edge location coordinates
-      lon?: number
-      doLat?: number // DO location coordinates
-      doLon?: number
+      // Track DO locations for this edge (may have multiple DOs)
+      doLocations: Map<string, { colo: string; lat: number; lon: number; sessionCount: number }>
     }
   >()
+
+  // Collect individual client locations when setting is enabled
+  const clientMarkers: Array<{
+    clientId: string
+    colo: string
+    lat: number
+    lon: number
+    isLeader: boolean
+    sessionId: string
+    doColo: string
+    doLat: number
+    doLon: number
+  }> = []
 
   let cursor: string | undefined
   do {
@@ -1598,87 +1621,108 @@ async function getMapUI(env: Env, user: AuthenticatedUser): Promise<Response> {
       const session = await env.SESSIONS.get<SessionRecord>(key.name, 'json')
       if (!session) continue
 
-      const syncUrl = session.synchronizerUrl || env.SYNCHRONIZER_URL
-      const existing = synchronizers.get(syncUrl)
+      // Use colo for edge location, fallback to 'unknown'
+      const edgeColo = session.colo || 'unknown'
+      const edgeColoLocation = COLO_LOCATIONS[edgeColo]
+      const doColo = session.doColo || edgeColo // If no doColo, assume same as edge
+      const doColoLocation = COLO_LOCATIONS[doColo]
+
+      const existing = edgeLocations.get(edgeColo)
 
       if (existing) {
         existing.sessionCount++
         existing.clientCount += session.clientCount || 0
         existing.lastSeen = Math.max(existing.lastSeen, session.lastSeen)
-        // Update colo if not set yet (use first session's colo)
-        if (!existing.colo && session.colo) existing.colo = session.colo
-        // Update doColo if not set yet (use first session's doColo)
-        if (!existing.doColo && session.doColo) {
-          existing.doColo = session.doColo
-          const doColoLocation = COLO_LOCATIONS[session.doColo]
-          if (doColoLocation) {
-            existing.doLat = doColoLocation.lat
-            existing.doLon = doColoLocation.lon
+        // Track DO location
+        if (doColo && doColoLocation) {
+          const existingDo = existing.doLocations.get(doColo)
+          if (existingDo) {
+            existingDo.sessionCount++
+          } else {
+            existing.doLocations.set(doColo, {
+              colo: doColo,
+              lat: doColoLocation.lat,
+              lon: doColoLocation.lon,
+              sessionCount: 1,
+            })
           }
         }
       } else {
-        const label = syncUrl.replace(/^wss?:\/\//, '').replace(/\/$/, '')
-        // Use explicit lat/lon from session if available, otherwise look up from colo
-        const coloLocation = session.colo ? COLO_LOCATIONS[session.colo] : undefined
-        const doColoLocation = session.doColo ? COLO_LOCATIONS[session.doColo] : undefined
-        synchronizers.set(syncUrl, {
-          url: syncUrl,
-          label,
+        const doLocations = new Map<string, { colo: string; lat: number; lon: number; sessionCount: number }>()
+        if (doColo && doColoLocation) {
+          doLocations.set(doColo, { colo: doColo, lat: doColoLocation.lat, lon: doColoLocation.lon, sessionCount: 1 })
+        }
+        edgeLocations.set(edgeColo, {
+          colo: edgeColo,
+          region: session.region || edgeColoLocation?.region || edgeColo,
+          lat: session.lat ?? edgeColoLocation?.lat ?? 40, // North Atlantic fallback (between NYC and Lisbon)
+          lon: session.lon ?? edgeColoLocation?.lon ?? -40,
           sessionCount: 1,
           clientCount: session.clientCount || 0,
           lastSeen: session.lastSeen,
-          colo: session.colo,
-          doColo: session.doColo,
-          region: session.region || coloLocation?.region || session.colo || env.CLUSTER_LABEL,
-          lat: session.lat ?? coloLocation?.lat,
-          lon: session.lon ?? coloLocation?.lon,
-          doLat: doColoLocation?.lat,
-          doLon: doColoLocation?.lon,
+          doLocations,
         })
+      }
+
+      // Collect individual client markers when tracking is enabled
+      if (trackClientLocations && session.clientLocations && doColoLocation) {
+        for (const client of session.clientLocations) {
+          const clientColoLoc = COLO_LOCATIONS[client.colo]
+          if (clientColoLoc) {
+            clientMarkers.push({
+              clientId: client.clientId,
+              colo: client.colo,
+              lat: clientColoLoc.lat,
+              lon: clientColoLoc.lon,
+              isLeader: client.isLeader,
+              sessionId: session.sessionId,
+              doColo: doColo,
+              doLat: doColoLocation.lat,
+              doLon: doColoLocation.lon,
+            })
+          }
+        }
       }
     }
 
     cursor = list.list_complete ? undefined : list.cursor
   } while (cursor)
 
-  const syncList = Array.from(synchronizers.values())
+  const locationList = Array.from(edgeLocations.values())
 
-  // For synchronizers without colo-based coordinates, place in Antarctica
-  for (const sync of syncList) {
-    if (sync.lat === undefined || sync.lon === undefined) {
-      sync.lat = -82.8628 // Antarctica
-      sync.lon = 135.0
-      sync.region = sync.region || 'Unknown Location'
+  // Build GeoJSON features - one per edge location, with DO connections
+  const features = locationList.map((loc) => {
+    // Convert DO locations map to array for JSON
+    const doLocationsArray = Array.from(loc.doLocations.values())
+    return {
+      type: 'Feature' as const,
+      geometry: {
+        type: 'Point' as const,
+        coordinates: [loc.lon, loc.lat],
+      },
+      properties: {
+        colo: loc.colo,
+        region: loc.region,
+        sessionCount: loc.sessionCount,
+        clientCount: loc.clientCount,
+        lastSeen: loc.lastSeen,
+        // DO locations for connecting lines (array of {colo, lat, lon, sessionCount})
+        doLocations: doLocationsArray,
+      },
     }
+  })
+
+  const geoJsonData = {
+    type: 'FeatureCollection',
+    features,
+    // Include client markers when tracking is enabled
+    clientMarkers: trackClientLocations ? clientMarkers : undefined,
+    trackingEnabled: trackClientLocations,
   }
-
-  // Build GeoJSON (now all synchronizers should have coordinates)
-  const features = syncList.map((s) => ({
-    type: 'Feature' as const,
-    geometry: {
-      type: 'Point' as const,
-      coordinates: [s.lon!, s.lat!],
-    },
-    properties: {
-      url: s.url,
-      label: s.label,
-      region: s.region,
-      sessionCount: s.sessionCount,
-      clientCount: s.clientCount,
-      lastSeen: s.lastSeen,
-      // DO location data for connecting lines visualization
-      colo: s.colo,
-      doColo: s.doColo,
-      doLat: s.doLat,
-      doLon: s.doLon,
-    },
-  }))
-
-  const geoJsonData = { type: 'FeatureCollection', features }
   const totals = {
-    synchronizers: syncList.length,
-    sessions: syncList.reduce((sum, s) => sum + s.sessionCount, 0),
-    clients: syncList.reduce((sum, s) => sum + s.clientCount, 0),
+    locations: locationList.length,
+    sessions: locationList.reduce((sum, s) => sum + s.sessionCount, 0),
+    clients: locationList.reduce((sum, s) => sum + s.clientCount, 0),
   }
 
   return html(renderMapPage(geoJsonData, totals, user.email, env.CLUSTER_LABEL))
@@ -1999,6 +2043,7 @@ async function getSettingsUI(env: Env, user: AuthenticatedUser): Promise<Respons
     synchronizer_registration_enabled: await getSettingValue('synchronizer_registration_enabled', true),
     require_api_key: await getSettingValue('require_api_key', true),
     max_sessions_per_synchronizer: await getSettingValue('max_sessions_per_synchronizer', 1000),
+    track_client_locations: await getSettingValue('track_client_locations', false),
   }
 
   return html(renderSettingsPage(settings, user.email, env.CLUSTER_LABEL))

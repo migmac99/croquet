@@ -105,6 +105,7 @@ interface WSAttachment {
   lastSeen: number
   joined: boolean
   active: boolean // Set true AFTER SYNC sent (like original reflector's client.active)
+  colo?: string // Edge datacenter code where this client connected (e.g., 'AMS', 'FRA', 'SFO')
 }
 
 /**
@@ -229,6 +230,8 @@ export class Synchronizer extends DurableObject<Env> {
     // Extract client info from request
     const clientId = crypto.randomUUID()
     const userIp = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For')?.split(',')[0] || 'unknown'
+    // Capture per-client colo (edge datacenter where this specific client connected)
+    const clientColo = request.headers.get('X-CF-Colo') || undefined
 
     // Create attachment (survives hibernation)
     const attachment: WSAttachment = {
@@ -238,6 +241,7 @@ export class Synchronizer extends DurableObject<Env> {
       lastSeen: Date.now(),
       joined: false,
       active: false, // Will be set true AFTER SYNC is sent
+      colo: clientColo, // Per-client edge location
     }
 
     // Accept WebSocket with hibernation support
@@ -1419,6 +1423,7 @@ export class Synchronizer extends DurableObject<Env> {
       lat: this.env.SYNC_LAT ? parseFloat(this.env.SYNC_LAT) : undefined,
       lon: this.env.SYNC_LON ? parseFloat(this.env.SYNC_LON) : undefined,
       region: this.env.SYNC_REGION,
+      clientLocations: this.buildClientLocations(), // Per-client locations for map
     })
 
     if (success) {
@@ -1460,6 +1465,7 @@ export class Synchronizer extends DurableObject<Env> {
       colo: this.colo, // Include colo in case it wasn't sent in initial registration
       doColo: this.doColo, // Include doColo (may have been detected after initial registration)
       metrics: this.metrics,
+      clientLocations: this.buildClientLocations(), // Per-client locations for map
     })
     if (success) this.lastRegistryHeartbeat = Date.now()
   }
@@ -1471,7 +1477,41 @@ export class Synchronizer extends DurableObject<Env> {
   private async updateClientCount(clientCount: number): Promise<void> {
     if (!this.registeredWithRegistry) return
     // Fire-and-forget - don't block the join/leave handler
-    this.callRegistry('/register', { sessionId: this.sessionId, clientCount })
+    this.callRegistry('/register', {
+      sessionId: this.sessionId,
+      clientCount,
+      clientLocations: this.buildClientLocations(),
+    })
+  }
+
+  /**
+   * Build client locations array for map visualization
+   * Returns array of { clientId, colo, isLeader } for each active client
+   * The leader is the first client that became active (oldest joinedAt among active clients)
+   */
+  private buildClientLocations(): Array<{ clientId: string; colo: string; isLeader: boolean }> {
+    const sockets = this.ctx.getWebSockets()
+    const activeClients: Array<{ clientId: string; colo: string; joinedAt: number }> = []
+
+    for (const ws of sockets) {
+      const att = ws.deserializeAttachment() as WSAttachment
+      if (att?.active && att.colo) {
+        activeClients.push({
+          clientId: att.clientId,
+          colo: att.colo,
+          joinedAt: att.joinedAt,
+        })
+      }
+    }
+
+    // Sort by joinedAt to determine leader (first to join and become active)
+    activeClients.sort((a, b) => a.joinedAt - b.joinedAt)
+
+    return activeClients.map((c, index) => ({
+      clientId: c.clientId,
+      colo: c.colo,
+      isLeader: index === 0, // First client is leader
+    }))
   }
 
   // ============================================================================

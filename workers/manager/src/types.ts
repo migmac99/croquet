@@ -89,6 +89,15 @@ export { LATENCY_BUCKETS, type SessionMetrics } from '@croquet/worker-shared'
 import type { SessionMetrics } from '@croquet/worker-shared'
 
 /**
+ * Individual client location data for map visualization
+ */
+export interface ClientLocation {
+  clientId: string
+  colo: string // Edge datacenter code (e.g., 'AMS', 'FRA', 'SFO')
+  isLeader: boolean // First active client in session
+}
+
+/**
  * Session record stored in KV
  */
 export interface SessionRecord {
@@ -106,6 +115,7 @@ export interface SessionRecord {
   lon?: number // Longitude (for non-CF deployments or explicit location)
   region?: string // Region label (e.g., 'US-West (San Francisco)')
   metrics?: SessionMetrics // Prometheus-compatible metrics
+  clientLocations?: ClientLocation[] // Individual client locations (when track_client_locations enabled)
 }
 
 /**
@@ -306,3 +316,4 @@ export type SettingKey =
   | 'synchronizer_registration_enabled' // Enable/disable synchronizer self-registration
   | 'require_api_key' // Require API key for session creation
   | 'max_sessions_per_synchronizer' // Max sessions per synchronizer
+  | 'track_client_locations' // Track individual client connection locations for map display

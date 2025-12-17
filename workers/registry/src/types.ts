@@ -14,6 +14,15 @@ export interface Env {
   REQUIRE_API_KEY: string
 }
 
+/**
+ * Individual client location data for map visualization
+ */
+export interface ClientLocation {
+  clientId: string
+  colo: string // Edge datacenter code (e.g., 'AMS', 'FRA', 'SFO')
+  isLeader: boolean // First active client in session
+}
+
 export interface SessionRecord {
   sessionId: string
   synchronizerUrl: string
@@ -29,6 +38,7 @@ export interface SessionRecord {
   lon?: number // Longitude (for non-CF deployments or explicit location)
   region?: string // Region label (e.g., 'US-West (San Francisco)')
   metrics?: SessionMetrics // Prometheus-compatible metrics
+  clientLocations?: ClientLocation[] // Individual client locations (when track_client_locations enabled)
 }
 
 export interface DispatchResponse {

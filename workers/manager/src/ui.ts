@@ -304,6 +304,7 @@ export function renderSessionsPage(
     clientCount: number
     appId?: string
     apiKeyId?: string
+    apiKeyName?: string
     accountId?: string
     accountName?: string
     colo?: string
@@ -327,6 +328,7 @@ export function renderSessionsPage(
         <div class="font-mono text-xs truncate flex-1 cursor-pointer hover:text-muted-foreground transition-colors" onclick="copyToClipboard('${escapeHtml(s.sessionId)}', 'Session ID')" title="Click to copy">${escapeHtml(s.sessionId)}</div>
         <span class="badge shrink-0 cursor-pointer hover:opacity-80" onclick="copyToClipboard('${escapeHtml(s.appId || 'Unknown')}', 'App ID')" title="Click to copy">${escapeHtml(s.appId || 'Unknown')}</span>
       </div>
+      ${s.apiKeyName ? `<div class="text-xs text-muted-foreground">API Key: <span class="font-medium">${escapeHtml(s.apiKeyName)}</span></div>` : ''}
       ${s.accountId ? `<div class="text-xs text-muted-foreground cursor-pointer hover:text-foreground transition-colors" onclick="copyToClipboard('${s.accountId}', 'Account ID')" title="Click to copy">Account: <span class="font-medium">${escapeHtml(s.accountName || accountMap.get(s.accountId) || s.accountId)}</span></div>` : ''}
       <div class="flex items-center justify-between text-sm">
         <span class="text-muted-foreground">Clients</span>
@@ -363,6 +365,9 @@ export function renderSessionsPage(
         <span class="badge cursor-pointer hover:opacity-80" onclick="copyToClipboard('${escapeHtml(s.appId || 'Unknown')}', 'App ID')" title="Click to copy">${escapeHtml(s.appId || 'Unknown')}</span>
       </td>
       <td class="px-6 py-5 text-sm">
+        ${s.apiKeyName ? `<span class="font-medium">${escapeHtml(s.apiKeyName)}</span>` : '<span class="text-muted-foreground">—</span>'}
+      </td>
+      <td class="px-6 py-5 text-sm">
         ${s.accountId ? `<span class="font-medium cursor-pointer hover:text-foreground transition-colors" onclick="copyToClipboard('${s.accountId}', 'Account ID')" title="Click to copy">${escapeHtml(s.accountName || accountMap.get(s.accountId) || s.accountId)}</span>` : '<span class="text-muted-foreground">—</span>'}
       </td>
       <td class="px-6 py-5">
@@ -384,7 +389,7 @@ export function renderSessionsPage(
   `
           )
           .join('')
-      : '<tr><td colspan="8" class="p-10 text-center text-muted-foreground">No active sessions</td></tr>'
+      : '<tr><td colspan="9" class="p-10 text-center text-muted-foreground">No active sessions</td></tr>'
 
   // Generate account options for the filter dropdown
   const accountOptions = accounts.map((a) => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)}</option>`).join('')
@@ -613,14 +618,9 @@ export function renderSynchronizersPage(
 // Map Page
 // ============================================================================
 
-export function renderMapPage(
-  geoJsonData: object,
-  totals: { synchronizers: number; sessions: number; clients: number },
-  user: string,
-  cluster: string
-): string {
+export function renderMapPage(geoJsonData: object, totals: { locations: number; sessions: number; clients: number }, user: string, cluster: string): string {
   const content = render(mapTemplate, {
-    total_synchronizers: totals.synchronizers,
+    total_locations: totals.locations,
     total_sessions: totals.sessions,
     total_clients: totals.clients,
     geojson_data: JSON.stringify(geoJsonData),
@@ -896,6 +896,7 @@ export function renderSettingsPage(
     synchronizer_registration_enabled: boolean
     require_api_key: boolean
     max_sessions_per_synchronizer: number
+    track_client_locations: boolean
   },
   user: string,
   cluster: string
@@ -904,6 +905,7 @@ export function renderSettingsPage(
     synchronizer_registration_checked: settings.synchronizer_registration_enabled ? 'checked' : '',
     require_api_key_checked: settings.require_api_key ? 'checked' : '',
     max_sessions_per_synchronizer: settings.max_sessions_per_synchronizer,
+    track_client_locations_checked: settings.track_client_locations ? 'checked' : '',
   })
 
   return renderPage({

@@ -278,6 +278,7 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
     lon?: number
     region?: string
     metrics?: SessionMetrics
+    clientLocations?: Array<{ clientId: string; colo: string; isLeader: boolean }>
   }>()
 
   if (!body.sessionId) return Response.json({ error: 'Missing sessionId' }, { status: 400, headers: corsHeaders() })
@@ -299,6 +300,8 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
     lon: body.lon ?? existing?.lon,
     region: body.region || existing?.region,
     metrics: body.metrics || existing?.metrics,
+    // Store client locations if provided (for map visualization)
+    clientLocations: body.clientLocations || existing?.clientLocations,
   }
 
   const ttl = Number(env.SESSION_TTL_SECONDS) || 3600

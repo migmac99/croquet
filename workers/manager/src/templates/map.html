@@ -27,8 +27,8 @@
 <!-- Summary stats -->
 <div class="grid grid-cols-1 sm:grid-cols-3 gap-5 mb-10">
   <div class="card p-6">
-    <div class="text-sm text-muted-foreground mb-1">Total Synchronizers</div>
-    <div class="text-3xl font-bold">{{total_synchronizers}}</div>
+    <div class="text-sm text-muted-foreground mb-1">Edge Locations</div>
+    <div class="text-3xl font-bold">{{total_locations}}</div>
   </div>
   <div class="card p-6">
     <div class="text-sm text-muted-foreground mb-1">Total Sessions</div>
@@ -48,7 +48,7 @@
 <!-- Legend -->
 <div class="mt-5 card p-5">
   <div class="text-sm font-medium mb-3">Legend</div>
-  <div class="flex flex-wrap gap-6 text-sm text-muted-foreground">
+  <div class="flex flex-wrap gap-6 text-sm text-muted-foreground" id="legend-items">
     <div class="flex items-center gap-2">
       <div class="w-4 h-4 rounded-full bg-emerald-500"></div>
       <span>Client edge (where clients connect)</span>
@@ -65,6 +65,15 @@
       <div class="w-3 h-3 rounded-full bg-emerald-500 opacity-50"></div>
       <span>Size = session count</span>
     </div>
+    <!-- Client tracking legend items (shown when tracking enabled) -->
+    <div class="flex items-center gap-2 client-legend hidden">
+      <div class="w-3 h-3 rounded-full bg-cyan-500"></div>
+      <span>Session leader</span>
+    </div>
+    <div class="flex items-center gap-2 client-legend hidden">
+      <div class="w-3 h-3 rounded-full bg-emerald-500 opacity-40"></div>
+      <span>Session follower</span>
+    </div>
   </div>
 </div>
 
@@ -77,6 +86,15 @@
 <script>
   // GeoJSON data embedded from registry
   const geoJsonData = {{geojson_data}};
+
+  // Check if client tracking is enabled
+  const trackingEnabled = geoJsonData.trackingEnabled || false;
+  const clientMarkers = geoJsonData.clientMarkers || [];
+
+  // Show client legend items if tracking enabled
+  if (trackingEnabled && clientMarkers.length > 0) {
+    document.querySelectorAll('.client-legend').forEach(el => el.classList.remove('hidden'));
+  }
 
   // Initialize map (zoom 1 = most zoomed out world view)
   const map = L.map('map', {
@@ -105,48 +123,68 @@
     return minRadius + (maxRadius - minRadius) * Math.sqrt(normalized);
   }
 
+  // Track DO markers to avoid duplicates (multiple edges may connect to same DO)
+  const doMarkersMap = new Map();
+  const bounds = L.latLngBounds();
+
   // Add GeoJSON layer with custom markers and connecting lines
   if (geoJsonData && geoJsonData.features && geoJsonData.features.length > 0) {
-    // First pass: draw connecting lines (so they appear behind markers)
+    // First pass: draw connecting lines from edges to DOs
     geoJsonData.features.forEach(function(feature) {
       const props = feature.properties;
       const edgeLat = feature.geometry.coordinates[1];
       const edgeLon = feature.geometry.coordinates[0];
+      bounds.extend([edgeLat, edgeLon]);
 
-      // If DO location differs from edge location, draw a line
-      if (props.doLat !== undefined && props.doLon !== undefined &&
-          (props.doLat !== edgeLat || props.doLon !== edgeLon)) {
-        // Draw line from edge to DO
-        const line = L.polyline(
-          [[edgeLat, edgeLon], [props.doLat, props.doLon]],
-          {
-            color: '#f59e0b', // Amber color
-            weight: 2,
-            opacity: 0.6,
-            dashArray: '5, 5'
-          }
-        ).addTo(map);
-
-        // Add DO location marker (smaller, purple)
-        L.circleMarker([props.doLat, props.doLon], {
-          radius: 6,
-          fillColor: '#8b5cf6', // Purple
-          color: '#7c3aed',
-          weight: 2,
-          opacity: 1,
-          fillOpacity: 0.7
-        }).addTo(map).bindPopup(`
-          <div class="p-2">
-            <div class="font-bold text-base mb-2">DO Location</div>
-            <div class="text-sm text-gray-500">
-              Durable Object running at: ${props.doColo || 'Unknown'}
-            </div>
-          </div>
-        `);
-      }
+      // Draw lines to each DO location
+      const doLocations = props.doLocations || [];
+      doLocations.forEach(function(doLoc) {
+        bounds.extend([doLoc.lat, doLoc.lon]);
+        // Only draw line if DO is at a different location
+        if (doLoc.lat !== edgeLat || doLoc.lon !== edgeLon) {
+          L.polyline(
+            [[edgeLat, edgeLon], [doLoc.lat, doLoc.lon]],
+            {
+              color: '#f59e0b', // Amber color
+              weight: 2,
+              opacity: 0.6,
+              dashArray: '5, 5'
+            }
+          ).addTo(map);
+        }
+        // Track DO location for later marker creation
+        if (!doMarkersMap.has(doLoc.colo)) {
+          doMarkersMap.set(doLoc.colo, doLoc);
+        }
+      });
     });
 
-    // Second pass: add edge location markers (on top of lines)
+    // Second pass: draw lines from individual clients to their DOs (when tracking enabled)
+    if (trackingEnabled && clientMarkers.length > 0) {
+      clientMarkers.forEach(function(client) {
+        bounds.extend([client.lat, client.lon]);
+        bounds.extend([client.doLat, client.doLon]);
+
+        // Draw line from client to DO (if different location)
+        if (client.lat !== client.doLat || client.lon !== client.doLon) {
+          L.polyline(
+            [[client.lat, client.lon], [client.doLat, client.doLon]],
+            {
+              color: client.isLeader ? '#06b6d4' : '#10b981', // Cyan for leader, green for follower
+              weight: 1.5,
+              opacity: client.isLeader ? 0.8 : 0.4,
+              dashArray: '3, 3'
+            }
+          ).addTo(map);
+        }
+        // Track DO for marker creation
+        if (!doMarkersMap.has(client.doColo)) {
+          doMarkersMap.set(client.doColo, { colo: client.doColo, lat: client.doLat, lon: client.doLon });
+        }
+      });
+    }
+
+    // Third pass: add edge location markers (aggregated view)
     L.geoJSON(geoJsonData, {
       pointToLayer: function(feature, latlng) {
         const props = feature.properties;
@@ -163,14 +201,14 @@
       },
       onEachFeature: function(feature, layer) {
         const props = feature.properties;
-        const locationInfo = props.colo ? `Edge: ${props.colo}` : '';
-        const doInfo = props.doColo ? `, DO: ${props.doColo}` : '';
+        const doLocations = props.doLocations || [];
+        const doColos = doLocations.map(d => d.colo).join(', ');
         const popupContent = `
           <div class="p-2">
-            <div class="font-bold text-base mb-2">${props.label || 'Synchronizer'}</div>
+            <div class="font-bold text-base mb-2">${props.region || props.colo || 'Edge Location'}</div>
             <div class="space-y-1 text-sm">
-              <div><span class="text-gray-500">Region:</span> ${props.region || 'Unknown'}</div>
-              ${locationInfo || doInfo ? `<div><span class="text-gray-500">Location:</span> ${locationInfo}${doInfo}</div>` : ''}
+              <div><span class="text-gray-500">Edge:</span> ${props.colo || 'Unknown'}</div>
+              ${doColos ? `<div><span class="text-gray-500">DO(s):</span> ${doColos}</div>` : ''}
               <div><span class="text-gray-500">Sessions:</span> ${props.sessionCount || 0}</div>
               <div><span class="text-gray-500">Clients:</span> ${props.clientCount || 0}</div>
               <div><span class="text-gray-500">Last seen:</span> ${props.lastSeen ? new Date(props.lastSeen).toLocaleString() : 'Unknown'}</div>
@@ -181,26 +219,57 @@
       }
     }).addTo(map);
 
-    // Fit map to show all markers (including DO locations)
-    const bounds = L.latLngBounds();
-    geoJsonData.features.forEach(function(feature) {
-      const edgeLat = feature.geometry.coordinates[1];
-      const edgeLon = feature.geometry.coordinates[0];
-      bounds.extend([edgeLat, edgeLon]);
+    // Fourth pass: add individual client markers (when tracking enabled)
+    if (trackingEnabled && clientMarkers.length > 0) {
+      clientMarkers.forEach(function(client) {
+        const isLeader = client.isLeader;
+        L.circleMarker([client.lat, client.lon], {
+          radius: isLeader ? 6 : 4,
+          fillColor: isLeader ? '#06b6d4' : '#10b981', // Cyan for leader, green for follower
+          color: isLeader ? '#0891b2' : '#059669',
+          weight: 2,
+          opacity: 1,
+          fillOpacity: isLeader ? 0.9 : 0.4
+        }).addTo(map).bindPopup(`
+          <div class="p-2">
+            <div class="font-bold text-base mb-2">${isLeader ? 'Session Leader' : 'Session Follower'}</div>
+            <div class="space-y-1 text-sm">
+              <div><span class="text-gray-500">Edge:</span> ${client.colo}</div>
+              <div><span class="text-gray-500">DO:</span> ${client.doColo}</div>
+              <div><span class="text-gray-500">Session:</span> ${client.sessionId.slice(0, 20)}...</div>
+            </div>
+          </div>
+        `);
+      });
+    }
 
-      // Also include DO locations if they differ
-      const props = feature.properties;
-      if (props.doLat !== undefined && props.doLon !== undefined) {
-        bounds.extend([props.doLat, props.doLon]);
-      }
+    // Fifth pass: add DO markers (ON TOP of everything else)
+    doMarkersMap.forEach(function(doLoc, colo) {
+      L.circleMarker([doLoc.lat, doLoc.lon], {
+        radius: 8,
+        fillColor: '#8b5cf6', // Purple
+        color: '#7c3aed',
+        weight: 2,
+        opacity: 1,
+        fillOpacity: 0.9
+      }).addTo(map).bindPopup(`
+        <div class="p-2">
+          <div class="font-bold text-base mb-2">DO Location: ${colo}</div>
+          <div class="text-sm text-gray-500">
+            Durable Object datacenter
+          </div>
+        </div>
+      `);
     });
+
+    // Fit map to bounds
     if (bounds.isValid()) {
       map.fitBounds(bounds, { padding: [50, 50] });
     }
   } else {
     // No data - show message
     const noDataDiv = L.DomUtil.create('div', 'no-data-message');
-    noDataDiv.innerHTML = '<div class="text-center text-muted-foreground p-10">No active synchronizers to display</div>';
+    noDataDiv.innerHTML = '<div class="text-center text-muted-foreground p-10">No active sessions to display</div>';
     noDataDiv.style.position = 'absolute';
     noDataDiv.style.top = '50%';
     noDataDiv.style.left = '50%';
