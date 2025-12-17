@@ -1003,16 +1003,19 @@ async function listSessions(env: Env): Promise<Response> {
 }
 
 async function getSession(sessionId: string, env: Env): Promise<Response> {
-  const record = await env.SESSIONS.get<SessionRecord>(sessionId, 'json')
+  // Key format matches synchronizer: session:${sessionId}
+  const record = await env.SESSIONS.get<SessionRecord>(`session:${sessionId}`, 'json')
   if (!record) return error('Session not found', 404)
   return json(record)
 }
 
 async function deleteSession(sessionId: string, env: Env, user: AuthenticatedUser): Promise<Response> {
-  const record = await env.SESSIONS.get<SessionRecord>(sessionId, 'json')
+  // Key format matches synchronizer: session:${sessionId}
+  const key = `session:${sessionId}`
+  const record = await env.SESSIONS.get<SessionRecord>(key, 'json')
   if (!record) return error('Session not found', 404)
 
-  await env.SESSIONS.delete(sessionId)
+  await env.SESSIONS.delete(key)
   console.log(`Session deleted: ${sessionId} by ${user.email}`)
   return json({ deleted: true, sessionId })
 }

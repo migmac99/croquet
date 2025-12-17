@@ -413,7 +413,21 @@ export class Synchronizer extends DurableObject<Env> {
     if (isEffectivelyFirstClient) {
       console.log(`[${this.sessionId}] First client joining - clearing stale message buffer (had ${this.state.messages.length} messages)`)
       this.state.messages = []
-      if (clientMustInitFresh) this.state.seq = INITIAL_SEQ
+
+      if (clientMustInitFresh) {
+        // No snapshot - start fresh from INITIAL_SEQ
+        this.state.seq = INITIAL_SEQ
+      } else {
+        // CRITICAL: Restore state from snapshot to continue correctly
+        // Without this, time/seq would stay at 0/INITIAL_SEQ and new TICKs
+        // would have wrong timestamps, causing "Expected message #X got #Y" errors
+        console.log(`[${this.sessionId}] Restoring state from snapshot: time=${snapshotTime}, seq=${snapshotSeq}`)
+        this.state.time = snapshotTime
+        this.state.seq = snapshotSeq
+        // Recalculate scaledStart so future advanceTime() continues from snapshotTime
+        // Formula: time = (now - scaledStart) * scale => scaledStart = now - time/scale
+        this.state.scaledStart = now() - snapshotTime / this.state.scale
+      }
 
       // Clear any pending users batch (stale from previous session)
       this.state.usersJoined = []
@@ -820,7 +834,11 @@ export class Synchronizer extends DurableObject<Env> {
       ws.send(JSON.stringify(snapRequest))
     } else if (action === 'response') {
       const { data: snapshotData, time, seq } = args
-      if (!this.storage || !snapshotData || !this.state) return
+      console.log(`[${this.sessionId}] SNAP response received: time=${time}, seq=${seq}, dataLen=${(snapshotData as string)?.length || 0}`)
+      if (!this.storage || !snapshotData || !this.state) {
+        console.log(`[${this.sessionId}] SNAP response skipped: storage=${!!this.storage}, data=${!!snapshotData}, state=${!!this.state}`)
+        return
+      }
 
       const snapshotTime = time as number
       const snapshotSeq = seq as number
@@ -1146,9 +1164,9 @@ export class Synchronizer extends DurableObject<Env> {
       // No clients - session timed out, clean up storage to free resources
       // Snapshots are kept in R2 for potential recovery
       console.log(`[${this.sessionId}] Session timed out, cleaning up storage`)
+      await this.untrackSession() // Remove from KV before deleting state
       await this.ctx.storage.deleteAll()
       this.state = null
-      this.trackedInKV = false
       return
     }
 

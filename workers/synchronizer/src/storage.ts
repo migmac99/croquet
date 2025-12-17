@@ -80,10 +80,12 @@ export class SnapshotStorage {
    * List available snapshots
    */
   async list(limit = 10): Promise<SnapshotMeta[]> {
+    // Note: include option requires compatibility_date >= 2022-08-04
     const listed = await this.bucket.list({
       prefix: `${this.prefix}snapshots/`,
       limit,
-    })
+      include: ['customMetadata'],
+    } as R2ListOptions & { include: string[] })
 
     return listed.objects.map((obj) => ({
       sessionId: this.sessionId,
