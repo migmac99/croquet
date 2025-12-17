@@ -4,7 +4,7 @@
     <p class="text-sm sm:text-base text-muted-foreground mt-2">Active synchronizer instances and their workloads</p>
   </div>
   <div class="flex gap-3">
-    <button onclick="location.reload()" class="btn btn-secondary">
+    <button id="refreshBtn" onclick="location.reload()" class="btn btn-secondary">
       <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path
           stroke-linecap="round"
@@ -13,7 +13,16 @@
           d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
         />
       </svg>
-      Refresh
+      <span>Refresh (5s)</span>
+    </button>
+    <button id="pauseBtn" onclick="toggleAutoRefresh()" class="btn btn-secondary" title="Pause auto-refresh">
+      <svg id="pauseIcon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+      <svg id="playIcon" class="w-4 h-4 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
     </button>
     <a href="/ui/map" class="btn btn-primary">
       <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -68,3 +77,52 @@
     </table>
   </div>
 </div>
+
+<script>
+  // Auto-refresh every 5 seconds
+  let autoRefreshInterval = null
+  let countdown = 5
+  let isPaused = false
+
+  function startAutoRefresh() {
+    if (isPaused) return
+    countdown = 5
+    updateRefreshButton()
+    autoRefreshInterval = setInterval(() => {
+      countdown--
+      updateRefreshButton()
+      if (countdown <= 0) location.reload()
+    }, 1000)
+  }
+
+  function stopAutoRefresh() {
+    if (autoRefreshInterval) {
+      clearInterval(autoRefreshInterval)
+      autoRefreshInterval = null
+    }
+  }
+
+  function toggleAutoRefresh() {
+    isPaused = !isPaused
+    const pauseIcon = document.getElementById('pauseIcon')
+    const playIcon = document.getElementById('playIcon')
+    const btn = document.getElementById('refreshBtn')
+    if (isPaused) {
+      stopAutoRefresh()
+      pauseIcon.classList.add('hidden')
+      playIcon.classList.remove('hidden')
+      if (btn) btn.querySelector('span').textContent = 'Refresh (paused)'
+    } else {
+      pauseIcon.classList.remove('hidden')
+      playIcon.classList.add('hidden')
+      startAutoRefresh()
+    }
+  }
+
+  function updateRefreshButton() {
+    const btn = document.getElementById('refreshBtn')
+    if (btn && !isPaused) btn.querySelector('span').textContent = `Refresh (${countdown}s)`
+  }
+
+  document.addEventListener('DOMContentLoaded', startAutoRefresh)
+</script>
