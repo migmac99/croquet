@@ -11,8 +11,7 @@ import type { SessionState } from './types'
 export const now = (): number => Date.now()
 
 /** Generate a random timeline identifier for seamless rejoin support */
-export const generateTimeline = (): string =>
-  Math.random().toString(36).substring(2) + Math.random().toString(36).substring(2)
+export const generateTimeline = (): string => Math.random().toString(36).substring(2) + Math.random().toString(36).substring(2)
 
 /** Answer true if seqB comes after seqA (wraparound-safe for uint32) */
 export const after = (seqA: number, seqB: number): boolean => {
@@ -62,12 +61,7 @@ export const advanceTime = (state: SessionState, reason?: string): number => {
  * Update session time scale (for pause/slowdown features)
  * Returns updated state fields to merge
  */
-export const updateTimeScale = (
-  state: SessionState,
-  newScale: number,
-  minScale: number,
-  maxScale: number
-): { scale: number; scaledStart: number } => {
+export const updateTimeScale = (state: SessionState, newScale: number, minScale: number, maxScale: number): { scale: number; scaledStart: number } => {
   const currentScaledTime = getScaledTime(state)
   const scaleToApply = Math.max(minScale, Math.min(maxScale, newScale))
   return {

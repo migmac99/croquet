@@ -98,9 +98,7 @@ export class SnapshotStorage {
    * Delete old snapshots, keeping only the N most recent
    */
   async prune(keepCount = 5): Promise<number> {
-    const listed = await this.bucket.list({
-      prefix: `${this.prefix}snapshots/`,
-    })
+    const listed = await this.bucket.list({ prefix: `${this.prefix}snapshots/` })
 
     // Sort by creation time descending
     const sorted = listed.objects.sort((a, b) => b.uploaded.getTime() - a.uploaded.getTime())

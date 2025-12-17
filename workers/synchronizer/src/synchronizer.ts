@@ -416,9 +416,8 @@ export class Synchronizer extends DurableObject<Env> {
     if (isEffectivelyFirstClient) {
       console.log(`[${this.sessionId}] First client joining - clearing stale message buffer (had ${this.state.messages.length} messages)`)
       this.state.messages = []
-      if (clientMustInitFresh) {
-        this.state.seq = INITIAL_SEQ
-      }
+      if (clientMustInitFresh) this.state.seq = INITIAL_SEQ
+
       // Clear any pending users batch (stale from previous session)
       this.state.usersJoined = []
       this.state.usersLeft = []
@@ -547,7 +546,6 @@ export class Synchronizer extends DurableObject<Env> {
     // Clients in Set but not yet active are briefly between SYNC and announceUserJoined
     // For consistency, use active count (original reflector's clients.size ≈ active count)
     const total = active
-
     if (active === 0) return // No-one to receive the message
 
     // Advance time
@@ -576,11 +574,7 @@ export class Synchronizer extends DurableObject<Env> {
     )
 
     // Broadcast RECV to all active clients
-    const recvMsg = {
-      id: this.sessionId,
-      action: 'RECV',
-      args: message,
-    }
+    const recvMsg = { id: this.sessionId, action: 'RECV', args: message }
     const msgStr = JSON.stringify(recvMsg)
     activeClients.forEach((ws) => ws.send(msgStr))
 
@@ -1191,10 +1185,7 @@ export class Synchronizer extends DurableObject<Env> {
         return att?.active === true && ws.readyState === WebSocket.READY_STATE_OPEN
       }
       const anyoneListening = sockets.some(sendingTicksTo)
-      if (!anyoneListening) {
-        // Don't advance time if nobody hears us (matches original reflector)
-        return
-      }
+      if (!anyoneListening) return // Don't advance time if nobody hears us (matches original reflector)
 
       const time = advanceTime(this.state, 'TICK')
       this.state.lastTick = time
@@ -1386,9 +1377,7 @@ export class Synchronizer extends DurableObject<Env> {
     const clients: Array<{ clientId: string; colo: string; joinedAt: number }> = []
     for (const ws of sockets) {
       const att = ws.deserializeAttachment() as WSAttachment
-      if (att?.active && att.colo) {
-        clients.push({ clientId: att.clientId, colo: att.colo, joinedAt: att.joinedAt })
-      }
+      if (att?.active && att.colo) clients.push({ clientId: att.clientId, colo: att.colo, joinedAt: att.joinedAt })
     }
     return clients
   }
@@ -1450,9 +1439,7 @@ export class Synchronizer extends DurableObject<Env> {
         this.doColo = match[1]
         await this.ctx.storage.put('doColo', this.doColo)
         console.log(`[${this.sessionId}] DO location detected: ${this.doColo}`)
-      } else {
-        console.warn(`[${this.sessionId}] DO location detection: colo not found in response`)
-      }
+      } else console.warn(`[${this.sessionId}] DO location detection: colo not found in response`)
     } catch (err) {
       console.error(`[${this.sessionId}] DO location detection error:`, err)
     }

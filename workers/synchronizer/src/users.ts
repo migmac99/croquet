@@ -46,10 +46,7 @@ export const createUserBatch = (): UserEventBatch => ({
 })
 
 /** Ensure batch arrays exist, returning initialized if needed */
-export const ensureUserBatch = (
-  usersJoined?: string[],
-  usersLeft?: string[]
-): UserEventBatch => ({
+export const ensureUserBatch = (usersJoined?: string[], usersLeft?: string[]): UserEventBatch => ({
   usersJoined: usersJoined ?? [],
   usersLeft: usersLeft ?? [],
 })
@@ -71,9 +68,7 @@ export const queueUserJoin = (batch: UserEventBatch, userId: string): UserEventB
   }
 
   // Only add if not already in joined array
-  if (usersJoined.includes(userId)) {
-    return batch
-  }
+  if (usersJoined.includes(userId)) return batch
 
   return {
     usersJoined: [...usersJoined, userId],
@@ -98,9 +93,7 @@ export const queueUserLeave = (batch: UserEventBatch, userId: string): UserEvent
   }
 
   // Only add if not already in left array
-  if (usersLeft.includes(userId)) {
-    return batch
-  }
+  if (usersLeft.includes(userId)) return batch
 
   return {
     usersJoined,
@@ -111,25 +104,15 @@ export const queueUserLeave = (batch: UserEventBatch, userId: string): UserEvent
 /**
  * Build a users event payload
  */
-export const buildUsersPayload = (
-  activeCount: number,
-  totalCount: number,
-  joined: string[],
-  left: string[]
-): UsersPayload => {
+export const buildUsersPayload = (activeCount: number, totalCount: number, joined: string[], left: string[]): UsersPayload => {
   const payload: UsersPayload = {
     what: 'users',
     active: activeCount,
     total: totalCount,
   }
 
-  if (joined.length > 0) {
-    payload.joined = joined.filter(Boolean)
-  }
-
-  if (left.length > 0) {
-    payload.left = left.filter(Boolean)
-  }
+  if (joined.length > 0) payload.joined = joined.filter(Boolean)
+  if (left.length > 0) payload.left = left.filter(Boolean)
 
   // Add _size property for accounting (matches original reflector)
   payload._size = JSON.stringify(payload).length
@@ -140,14 +123,7 @@ export const buildUsersPayload = (
 /**
  * Build a complete users event message
  */
-export const buildUsersMessage = (
-  time: number,
-  seq: number,
-  activeCount: number,
-  totalCount: number,
-  joined: string[],
-  left: string[]
-): unknown[] => {
+export const buildUsersMessage = (time: number, seq: number, activeCount: number, totalCount: number, joined: string[], left: string[]): unknown[] => {
   const payload = buildUsersPayload(activeCount, totalCount, joined, left)
   return [time, seq, payload]
 }
@@ -155,15 +131,12 @@ export const buildUsersMessage = (
 /**
  * Check if a batch has any events to send
  */
-export const hasPendingEvents = (batch: UserEventBatch): boolean =>
-  batch.usersJoined.length > 0 || batch.usersLeft.length > 0
+export const hasPendingEvents = (batch: UserEventBatch): boolean => batch.usersJoined.length > 0 || batch.usersLeft.length > 0
 
 /**
  * Flush a batch (returns the events and clears the batch)
  */
-export const flushBatch = (
-  batch: UserEventBatch
-): { joined: string[]; left: string[]; cleared: UserEventBatch } => ({
+export const flushBatch = (batch: UserEventBatch): { joined: string[]; left: string[]; cleared: UserEventBatch } => ({
   joined: batch.usersJoined,
   left: batch.usersLeft,
   cleared: createUserBatch(),

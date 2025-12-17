@@ -57,8 +57,7 @@ export interface PersistentRecord {
 export const buildSessionKey = (sessionId: string): string => `session:${sessionId}`
 
 /** Build KV key for persistent data */
-export const buildPersistKey = (appId: string, persistentId: string): string =>
-  `persist:${appId}:${persistentId}`
+export const buildPersistKey = (appId: string, persistentId: string): string => `persist:${appId}:${persistentId}`
 
 // ============================================================================
 // Record Builders
@@ -120,8 +119,7 @@ export const buildPersistentRecord = (url: string): PersistentRecord => ({
 // ============================================================================
 
 /** Check if enough time has passed since last update */
-export const shouldUpdate = (lastUpdate: number, interval: number = HEARTBEAT_INTERVAL_MS): boolean =>
-  Date.now() - lastUpdate >= interval
+export const shouldUpdate = (lastUpdate: number, interval: number = HEARTBEAT_INTERVAL_MS): boolean => Date.now() - lastUpdate >= interval
 
 /** Parse TTL from env string with default */
 export const parseTtl = (ttlString: string | undefined, defaultValue: number = DEFAULT_SESSION_TTL_SECONDS): number =>
@@ -131,9 +129,7 @@ export const parseTtl = (ttlString: string | undefined, defaultValue: number = D
  * Build client locations from active client data
  * Sorts by joinedAt to determine leader (first to join)
  */
-export const buildClientLocations = (
-  clients: Array<{ clientId: string; colo: string; joinedAt: number }>
-): ClientLocation[] => {
+export const buildClientLocations = (clients: Array<{ clientId: string; colo: string; joinedAt: number }>): ClientLocation[] => {
   // Sort by joinedAt to determine leader (first to join and become active)
   const sorted = [...clients].sort((a, b) => a.joinedAt - b.joinedAt)
 
@@ -152,16 +148,9 @@ export const buildClientLocations = (
  * Track a session in KV storage
  * Returns true if successful
  */
-export const trackSession = async (
-  kv: KVNamespace,
-  sessionId: string,
-  record: SessionRecord,
-  ttlSeconds: number
-): Promise<boolean> => {
+export const trackSession = async (kv: KVNamespace, sessionId: string, record: SessionRecord, ttlSeconds: number): Promise<boolean> => {
   try {
-    await kv.put(buildSessionKey(sessionId), JSON.stringify(record), {
-      expirationTtl: ttlSeconds,
-    })
+    await kv.put(buildSessionKey(sessionId), JSON.stringify(record), { expirationTtl: ttlSeconds })
     return true
   } catch (err) {
     console.error(`[${sessionId}] Session tracking error:`, err)
@@ -187,12 +176,7 @@ export const untrackSession = async (kv: KVNamespace, sessionId: string): Promis
  * Lookup persistent data URL from KV
  * Returns null if not found or on error
  */
-export const lookupPersistentUrl = async (
-  kv: KVNamespace,
-  appId: string,
-  persistentId: string,
-  sessionId?: string
-): Promise<string | null> => {
+export const lookupPersistentUrl = async (kv: KVNamespace, appId: string, persistentId: string, sessionId?: string): Promise<string | null> => {
   try {
     const key = buildPersistKey(appId, persistentId)
     const data = await kv.get<PersistentRecord>(key, 'json')
@@ -207,13 +191,7 @@ export const lookupPersistentUrl = async (
  * Store persistent data URL in KV
  * Returns true if successful
  */
-export const storePersistentUrl = async (
-  kv: KVNamespace,
-  appId: string,
-  persistentId: string,
-  url: string,
-  sessionId?: string
-): Promise<boolean> => {
+export const storePersistentUrl = async (kv: KVNamespace, appId: string, persistentId: string, url: string, sessionId?: string): Promise<boolean> => {
   try {
     const key = buildPersistKey(appId, persistentId)
     await kv.put(key, JSON.stringify(buildPersistentRecord(url)))

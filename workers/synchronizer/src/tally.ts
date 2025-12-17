@@ -71,10 +71,7 @@ export const createTallyStorage = (): TallyStorage => ({
 })
 
 /** Ensure tally storage exists, returning initialized if needed */
-export const ensureTallyStorage = (
-  tallies?: Record<string, Tally>,
-  completedTallies?: Record<string, number>
-): TallyStorage => ({
+export const ensureTallyStorage = (tallies?: Record<string, Tally>, completedTallies?: Record<string, number>): TallyStorage => ({
   tallies: tallies ?? {},
   completedTallies: completedTallies ?? {},
 })
@@ -107,15 +104,11 @@ export const cleanUpCompletedTallies = (
   const cleaned: Record<string, number> = {}
 
   for (const [key, time] of Object.entries(completedTallies)) {
-    if (time >= historyLimit) {
-      cleaned[key] = time
-    }
+    if (time >= historyLimit) cleaned[key] = time
   }
 
   // Add sentinel if needed
-  if (newSentinel !== undefined) {
-    cleaned[''] = newSentinel
-  }
+  if (newSentinel !== undefined) cleaned[''] = newSentinel
 
   // Return the effective history limit
   const effectiveLimit = sentinel !== undefined ? sentinel : historyLimit
@@ -140,13 +133,7 @@ export const shouldRejectVote = (
 /**
  * Create a new tally for a TUTTI vote
  */
-export const createTally = (
-  sendTime: number,
-  activeClientCount: number,
-  wantsVote?: boolean,
-  tallyTarget?: unknown,
-  firstMsg?: unknown[]
-): Tally => ({
+export const createTally = (sendTime: number, activeClientCount: number, wantsVote?: boolean, tallyTarget?: unknown, firstMsg?: unknown[]): Tally => ({
   sendTime,
   expecting: activeClientCount,
   payloads: {},
@@ -200,11 +187,7 @@ export const buildTallyMessage = (result: TallyResult): unknown => ({
 /**
  * Mark a tally as completed (move from active to completed)
  */
-export const completeTallyInStorage = (
-  storage: TallyStorage,
-  tuttiKey: string,
-  sendTime: number
-): void => {
+export const completeTallyInStorage = (storage: TallyStorage, tuttiKey: string, sendTime: number): void => {
   delete storage.tallies[tuttiKey]
   storage.completedTallies[tuttiKey] = sendTime
 }
@@ -218,9 +201,7 @@ export const findTimedOutTallies = (tallies: Record<string, Tally>): string[] =>
   const timedOut: string[] = []
 
   for (const [tuttiKey, tally] of Object.entries(tallies)) {
-    if (currentTime - tally.startedAt >= TALLY_INTERVAL) {
-      timedOut.push(tuttiKey)
-    }
+    if (currentTime - tally.startedAt >= TALLY_INTERVAL) timedOut.push(tuttiKey)
   }
 
   return timedOut
