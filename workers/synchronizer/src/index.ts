@@ -48,13 +48,17 @@ export default {
     // SDK calls /sign/join?meta=login or /join?meta=login for key validation
     if (['/sign/join', '/clients/join', '/join'].includes(url.pathname)) return handleApiKeyValidation(request, env)
 
-    // Session info endpoint
+    // Session info endpoints: /session/{id}, /session/{id}/info, /session/{id}/snapshots
     if (url.pathname.startsWith('/session/') && request.method === 'GET') {
-      const sessionId = url.pathname.split('/')[2]
+      const parts = url.pathname.split('/').filter(Boolean) // ['session', '{id}', 'info'?]
+      const sessionId = parts[1]
+      const subpath = parts[2] // 'info', 'snapshots', or undefined
       if (sessionId) {
         const id = env.SYNCHRONIZER.idFromName(sessionId)
         const stub = env.SYNCHRONIZER.get(id)
-        return stub.fetch(new Request(`${url.origin}/health`))
+        // Forward to appropriate DO endpoint
+        const doPath = subpath === 'info' ? '/info' : subpath === 'snapshots' ? '/snapshots' : '/health'
+        return stub.fetch(new Request(`${url.origin}${doPath}`))
       }
     }
 

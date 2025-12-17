@@ -113,17 +113,37 @@ export class Synchronizer extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url)
 
-    // Health check
+    // Health check (basic)
     if (url.pathname.endsWith('/health')) {
       const sockets = this.ctx.getWebSockets()
       return Response.json({
         status: 'ok',
         clients: sockets.length,
         hibernatable: true,
-        colo: this.colo, // Client edge location (from request.cf.colo)
-        doColo: this.doColo, // DO's actual location (detected via cdn-cgi/trace)
+        colo: this.colo,
+        doColo: this.doColo,
         state: this.state,
       })
+    }
+
+    // Detailed session info (for inspector/debugging)
+    if (url.pathname.endsWith('/info')) {
+      try {
+        return Response.json(await this.getSessionInfo())
+      } catch (err) {
+        console.error('[sync] Error getting session info:', err)
+        return Response.json({ error: 'Session not found or expired', status: 'expired' }, { status: 404 })
+      }
+    }
+
+    // List snapshots for this session
+    if (url.pathname.endsWith('/snapshots')) {
+      try {
+        return Response.json(await this.getSnapshotList())
+      } catch (err) {
+        console.error('[sync] Error getting snapshots:', err)
+        return Response.json({ snapshots: [], error: 'Session not found or expired' }, { status: 404 })
+      }
     }
 
     // WebSocket upgrade
@@ -1375,4 +1395,116 @@ export class Synchronizer extends DurableObject<Env> {
       console.log(`[${this.sessionId}] DO location detected: ${this.doColo}`)
     } else console.warn(`[${this.sessionId}] DO location detection failed`)
   }
+
+  /**
+   * Get detailed session info for inspector/debugging
+   * Returns comprehensive session state, client info, and metrics
+   */
+  private async getSessionInfo(): Promise<Record<string, unknown>> {
+    const sockets = this.ctx.getWebSockets()
+    const clients: Array<Record<string, unknown>> = []
+
+    for (const ws of sockets) {
+      const att = ws.deserializeAttachment() as WSAttachment
+      if (att) {
+        clients.push({
+          clientId: att.clientId,
+          active: att.active,
+          joined: att.joined,
+          colo: att.colo,
+          joinedAt: att.joinedAt,
+          lastSeen: att.lastSeen,
+          userId: att.userId,
+        })
+      }
+    }
+
+    // Sort clients by joinedAt (leader first)
+    clients.sort((a, b) => (a.joinedAt as number) - (b.joinedAt as number))
+    if (clients.length > 0) clients[0].isLeader = true
+
+    return {
+      sessionId: this.sessionId,
+      sessionName: this.sessionName,
+      status: this.state ? 'active' : 'uninitialized',
+      location: {
+        edge: this.colo,
+        durable: this.doColo,
+      },
+      timing: this.state
+        ? {
+            time: this.state.time,
+            seq: this.state.seq,
+            tick: this.state.tick,
+            scale: this.state.scale,
+            createdAt: this.state.createdAt,
+            lastActivity: this.state.lastActivity,
+            lastTick: this.state.lastTick,
+            lastMsgTime: this.state.lastMsgTime,
+          }
+        : null,
+      snapshot: this.state
+        ? {
+            time: this.state.snapshotTime,
+            seq: this.state.snapshotSeq,
+            url: this.state.snapshotUrl ? 'present' : null,
+            persistentUrl: this.state.persistentUrl ? 'present' : null,
+          }
+        : null,
+      messages: {
+        buffered: this.state?.messages?.length || 0,
+        maxBuffer: MAX_MESSAGES,
+        requThreshold: REQU_SNAPSHOT,
+      },
+      clients: {
+        count: clients.length,
+        list: clients,
+      },
+      metrics: this.metrics,
+      tallies: this.state?.tallies ? Object.keys(this.state.tallies).length : 0,
+      timeline: this.state?.timeline,
+      flags: this.state?.flags,
+    }
+  }
+
+  /**
+   * Get list of snapshots for this session from R2
+   */
+  private async getSnapshotList(): Promise<Record<string, unknown>> {
+    if (!this.storage) {
+      return { sessionId: this.sessionId, snapshots: [], error: 'No storage configured' }
+    }
+
+    try {
+      const snapshots = await this.storage.list(20) // Get last 20 snapshots
+      return {
+        sessionId: this.sessionId,
+        snapshots: snapshots.map((s) => ({
+          time: s.time,
+          seq: s.seq,
+          size: s.size,
+          sizeHuman: formatBytes(s.size),
+          createdAt: s.createdAt,
+          createdAtHuman: new Date(s.createdAt).toISOString(),
+        })),
+        current: this.state
+          ? {
+              time: this.state.snapshotTime,
+              seq: this.state.snapshotSeq,
+            }
+          : null,
+      }
+    } catch (err) {
+      return { sessionId: this.sessionId, snapshots: [], error: String(err) }
+    }
+  }
+}
+
+/** Format bytes to human-readable string */
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
 }

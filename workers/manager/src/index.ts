@@ -33,7 +33,19 @@ import {
   renderMetricsPage,
   renderStoragePage,
   renderSettingsPage,
+  renderSessionInspectorPage,
+  type SessionInspectorData,
 } from './ui'
+
+/**
+ * Check if a string looks like a valid URL (has protocol)
+ * Used to validate synchronizerUrl from session records since older records
+ * may contain CLUSTER_LABEL instead of an actual URL
+ */
+function isValidUrl(url: string | undefined): boolean {
+  if (!url) return false
+  return /^(ws|wss|http|https):\/\//.test(url)
+}
 
 /**
  * Verify Bearer token auth against stored account secrets
@@ -256,6 +268,10 @@ export default {
       if (path === '/ui/metrics') return await getMetricsUI(env, user) // Metrics UI
       if (path === '/ui/storage') return await getStorageUI(env, user) // Storage UI
       if (path === '/ui/settings') return await getSettingsUI(env, user) // Settings UI
+
+      // Session inspector: /ui/session/{sessionId}
+      const sessionInspectorMatch = path.match(/^\/ui\/session\/(.+)$/)
+      if (sessionInspectorMatch) return await getSessionInspectorUI(decodeURIComponent(sessionInspectorMatch[1]), env, user)
 
       // ========================================
       // API Routes (JSON)
@@ -1540,7 +1556,8 @@ async function getSynchronizersUI(env: Env, user: AuthenticatedUser): Promise<Re
       const session = await env.SESSIONS.get<SessionRecord>(key.name, 'json')
       if (!session) continue
 
-      const syncUrl = session.synchronizerUrl || env.SYNCHRONIZER_URL
+      // Validate URL - older records may have CLUSTER_LABEL instead of actual URL
+      const syncUrl = isValidUrl(session.synchronizerUrl) ? session.synchronizerUrl : env.SYNCHRONIZER_URL
       const existing = synchronizers.get(syncUrl)
 
       if (existing) {
@@ -2142,4 +2159,70 @@ async function getSettingsUI(env: Env, user: AuthenticatedUser): Promise<Respons
   }
 
   return html(renderSettingsPage(settings, user.email, env.CLUSTER_LABEL))
+}
+
+/**
+ * Session Inspector UI - detailed view of a single session
+ */
+async function getSessionInspectorUI(sessionId: string, env: Env, user: AuthenticatedUser): Promise<Response> {
+  // First get session record from KV to find the synchronizer URL
+  const sessionRecord = await env.SESSIONS.get<SessionRecord>(`session:${sessionId}`, 'json')
+
+  // If no session record or invalid URL, use the default synchronizer URL
+  // Older records may have CLUSTER_LABEL instead of actual URL
+  const syncUrl = isValidUrl(sessionRecord?.synchronizerUrl) ? sessionRecord!.synchronizerUrl : env.SYNCHRONIZER_URL
+
+  // Fetch detailed session info from synchronizer
+  let sessionInfo: Record<string, unknown> = {}
+  let snapshots: Array<{ time: number; seq: number; size: number; sizeHuman: string; createdAt: number; createdAtHuman: string }> = []
+
+  try {
+    // Convert ws/wss to http/https for API calls
+    const httpUrl = syncUrl.replace(/^ws/, 'http')
+
+    // Fetch session info and snapshots in parallel
+    const [infoRes, snapshotsRes] = await Promise.all([
+      fetch(`${httpUrl}/session/${encodeURIComponent(sessionId)}/info`),
+      fetch(`${httpUrl}/session/${encodeURIComponent(sessionId)}/snapshots`),
+    ])
+
+    if (infoRes.ok) {
+      sessionInfo = (await infoRes.json()) as Record<string, unknown>
+    } else {
+      // Try to parse error response (e.g., 404 for expired sessions)
+      try {
+        sessionInfo = (await infoRes.json()) as Record<string, unknown>
+      } catch {
+        sessionInfo = { status: 'expired', error: `HTTP ${infoRes.status}` }
+      }
+    }
+
+    if (snapshotsRes.ok) {
+      const snapshotsData = (await snapshotsRes.json()) as { snapshots?: typeof snapshots }
+      snapshots = snapshotsData.snapshots || []
+    }
+  } catch {
+    // Session likely timed out and DO was cleaned up - this is expected
+    console.warn(`[mgr] Session info unavailable for ${sessionId} (session may have expired)`)
+    sessionInfo = { status: 'expired' }
+  }
+
+  // Build data for the inspector page
+  const data: SessionInspectorData = {
+    sessionId,
+    sessionName: sessionInfo.sessionName as string | undefined,
+    status: (sessionInfo.status as string) || 'unknown',
+    location: (sessionInfo.location as { edge?: string; durable?: string }) || {},
+    timing: sessionInfo.timing as SessionInspectorData['timing'],
+    snapshot: sessionInfo.snapshot as SessionInspectorData['snapshot'],
+    messages: (sessionInfo.messages as SessionInspectorData['messages']) || { buffered: 0, maxBuffer: 100000 },
+    clients: (sessionInfo.clients as SessionInspectorData['clients']) || { count: 0, list: [] },
+    metrics: sessionInfo.metrics as SessionInspectorData['metrics'],
+    tallies: (sessionInfo.tallies as number) || 0,
+    flags: sessionInfo.flags as Record<string, unknown>,
+    snapshots,
+    synchronizerUrl: syncUrl.replace(/^ws/, 'http'),
+  }
+
+  return html(renderSessionInspectorPage(data, user.email, env.CLUSTER_LABEL))
 }

@@ -21,6 +21,7 @@ import mapTemplate from './templates/map.html'
 import metricsTemplate from './templates/metrics.html'
 import storageTemplate from './templates/storage.html'
 import settingsTemplate from './templates/settings.html'
+import sessionInspectorTemplate from './templates/session-inspector.html'
 // Import compiled Tailwind CSS (wrangler rules configured to import as text)
 import compiledStyles from './styles/output.css'
 
@@ -325,7 +326,7 @@ export function renderSessionsPage(
             (s) => `
     <div class="card p-6 space-y-4" data-account-id="${s.accountId || ''}">
       <div class="flex items-start justify-between gap-3">
-        <div class="font-mono text-xs truncate flex-1 cursor-pointer hover:text-muted-foreground transition-colors" onclick="copyToClipboard('${escapeHtml(s.sessionId)}', 'Session ID')" title="Click to copy">${escapeHtml(s.sessionId)}</div>
+        <a href="/ui/session/${encodeURIComponent(s.sessionId)}" class="font-mono text-xs truncate flex-1 hover:text-primary transition-colors" title="Inspect session">${escapeHtml(s.sessionId)}</a>
         <span class="badge shrink-0 cursor-pointer hover:opacity-80" onclick="copyToClipboard('${escapeHtml(s.appId || 'Unknown')}', 'App ID')" title="Click to copy">${escapeHtml(s.appId || 'Unknown')}</span>
       </div>
       ${s.apiKeyName ? `<div class="text-xs text-muted-foreground">API Key: <span class="font-medium">${escapeHtml(s.apiKeyName)}</span></div>` : ''}
@@ -342,8 +343,9 @@ export function renderSessionsPage(
         <span>Last activity</span>
         <span>${formatTimeAgo(s.lastSeen)}</span>
       </div>
-      <div class="pt-3 border-t border-border">
-        <button onclick="deleteSession('${escapeHtml(s.sessionId)}')" class="btn btn-ghost btn-sm w-full text-red-400 hover:text-red-300">End Session</button>
+      <div class="pt-3 border-t border-border flex gap-2">
+        <a href="/ui/session/${encodeURIComponent(s.sessionId)}" class="btn btn-ghost btn-sm flex-1">Inspect</a>
+        <button onclick="deleteSession('${escapeHtml(s.sessionId)}')" class="btn btn-ghost btn-sm flex-1 text-red-400 hover:text-red-300">End</button>
       </div>
     </div>
   `
@@ -359,7 +361,7 @@ export function renderSessionsPage(
             (s) => `
     <tr class="border-b border-border hover:bg-secondary/30 transition-colors" data-account-id="${s.accountId || ''}">
       <td class="px-6 py-5">
-        <div class="font-mono text-sm truncate max-w-xs cursor-pointer hover:text-muted-foreground transition-colors" onclick="copyToClipboard('${escapeHtml(s.sessionId)}', 'Session ID')" title="Click to copy">${escapeHtml(s.sessionId)}</div>
+        <a href="/ui/session/${encodeURIComponent(s.sessionId)}" class="font-mono text-sm truncate max-w-xs block hover:text-primary transition-colors" title="Inspect session">${escapeHtml(s.sessionId)}</a>
       </td>
       <td class="px-6 py-5">
         <span class="badge cursor-pointer hover:opacity-80" onclick="copyToClipboard('${escapeHtml(s.appId || 'Unknown')}', 'App ID')" title="Click to copy">${escapeHtml(s.appId || 'Unknown')}</span>
@@ -383,7 +385,10 @@ export function renderSessionsPage(
         ${formatTimeAgo(s.lastSeen)}
       </td>
       <td class="px-6 py-5 whitespace-nowrap">
-        <button onclick="deleteSession('${escapeHtml(s.sessionId)}')" class="btn btn-ghost btn-sm text-red-400 hover:text-red-300 whitespace-nowrap">End Session</button>
+        <div class="flex gap-2">
+          <a href="/ui/session/${encodeURIComponent(s.sessionId)}" class="btn btn-ghost btn-sm">Inspect</a>
+          <button onclick="deleteSession('${escapeHtml(s.sessionId)}')" class="btn btn-ghost btn-sm text-red-400 hover:text-red-300">End</button>
+        </div>
       </td>
     </tr>
   `
@@ -975,6 +980,157 @@ export function renderSettingsPage(
 }
 
 // ============================================================================
+// Session Inspector Page
+// ============================================================================
+
+export interface SessionInspectorData {
+  sessionId: string
+  sessionName?: string
+  status: string
+  location: { edge?: string; durable?: string }
+  timing?: {
+    time: number
+    seq: number
+    tick: number
+    scale: number
+    createdAt: number
+    lastActivity: number
+  }
+  snapshot?: {
+    time?: number
+    seq?: number
+    url?: string
+    persistentUrl?: string
+  }
+  messages: { buffered: number; maxBuffer: number }
+  clients: {
+    count: number
+    list: Array<{
+      clientId: string
+      active: boolean
+      joined: boolean
+      colo?: string
+      joinedAt: number
+      lastSeen: number
+      userId?: unknown // Can be string, object, or array per Croquet protocol
+      isLeader?: boolean
+    }>
+  }
+  metrics?: SessionMetrics
+  tallies: number
+  flags?: Record<string, unknown>
+  snapshots: Array<{
+    time: number
+    seq: number
+    size: number
+    sizeHuman: string
+    createdAt: number
+    createdAtHuman: string
+  }>
+  synchronizerUrl: string
+}
+
+export function renderSessionInspectorPage(data: SessionInspectorData, user: string, cluster: string): string {
+  // Generate client rows
+  const clientRows =
+    data.clients.list.length > 0
+      ? data.clients.list
+          .map(
+            (c) => `
+    <div class="p-4 hover:bg-secondary/30 transition-colors">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          ${c.isLeader ? '<span class="badge badge-success text-xs">Leader</span>' : ''}
+          <span class="badge ${c.active ? 'badge-success' : 'badge-warning'}">${c.active ? 'Active' : 'Joining'}</span>
+        </div>
+        <span class="text-sm text-muted-foreground">${c.colo || 'Unknown'}</span>
+      </div>
+      <div class="mt-2 space-y-1">
+        <div class="font-mono text-xs text-muted-foreground truncate cursor-pointer hover:text-foreground transition-colors" onclick="copyToClipboard('${c.clientId}', 'Client ID')" title="Click to copy">${c.clientId}</div>
+        ${c.userId ? `<div class="text-xs text-muted-foreground">User: ${escapeHtml(formatUserId(c.userId))}</div>` : ''}
+        <div class="text-xs text-muted-foreground">Joined: ${formatTimeAgo(c.joinedAt)} • Last seen: ${formatTimeAgo(c.lastSeen)}</div>
+      </div>
+    </div>`
+          )
+          .join('')
+      : '<div class="p-6 text-center text-muted-foreground">No connected clients</div>'
+
+  // Generate snapshot rows
+  const snapshotRows =
+    data.snapshots.length > 0
+      ? data.snapshots
+          .map(
+            (s) => `
+    <div class="p-4 hover:bg-secondary/30 transition-colors">
+      <div class="flex items-center justify-between">
+        <div>
+          <div class="font-mono text-sm">seq: ${s.seq}, time: ${s.time}</div>
+          <div class="text-xs text-muted-foreground mt-1">${s.createdAtHuman}</div>
+        </div>
+        <span class="badge">${s.sizeHuman}</span>
+      </div>
+    </div>`
+          )
+          .join('')
+      : '<div class="p-6 text-center text-muted-foreground">No snapshots stored</div>'
+
+  // Generate flags section
+  const flagsSection =
+    data.flags && Object.keys(data.flags).length > 0
+      ? `<div class="card">
+        <div class="p-5 border-b border-border">
+          <h3 class="font-semibold">Flags</h3>
+        </div>
+        <div class="p-5 space-y-2">
+          ${Object.entries(data.flags)
+            .map(([key, value]) => `<div class="flex justify-between"><span class="text-muted-foreground">${escapeHtml(key)}</span><span class="font-mono text-sm">${escapeHtml(String(value))}</span></div>`)
+            .join('')}
+        </div>
+      </div>`
+      : ''
+
+  const content = render(sessionInspectorTemplate, {
+    session_id: data.sessionId,
+    session_id_encoded: encodeURIComponent(data.sessionId),
+    status: data.status,
+    status_badge: data.status === 'active' ? 'badge-success' : 'badge-warning',
+    client_count: data.clients.count,
+    messages_buffered: data.messages.buffered,
+    messages_max: formatNumber(data.messages.maxBuffer),
+    session_time: data.timing?.time ?? 0,
+    session_seq: data.timing?.seq ?? 0,
+    edge_colo: data.location.edge || '—',
+    do_colo: data.location.durable || '—',
+    tick_interval: data.timing?.tick ?? 50,
+    time_scale: data.timing?.scale ?? 1,
+    created_at: data.timing?.createdAt ? new Date(data.timing.createdAt).toLocaleString() : '—',
+    last_activity: data.timing?.lastActivity ? formatTimeAgo(data.timing.lastActivity) : '—',
+    snapshot_time: data.snapshot?.time ?? '—',
+    snapshot_seq: data.snapshot?.seq ?? '—',
+    has_snapshot: data.snapshot?.url ? 'Yes' : 'No',
+    snapshot_badge: data.snapshot?.url ? 'badge-success' : '',
+    has_persistent: data.snapshot?.persistentUrl ? 'Yes' : 'No',
+    persistent_badge: data.snapshot?.persistentUrl ? 'badge-success' : '',
+    metrics_messages: formatNumber(data.metrics?.messagesTotal ?? 0),
+    metrics_ticks: formatNumber(data.metrics?.ticksTotal ?? 0),
+    tallies_count: data.tallies,
+    client_rows: clientRows,
+    snapshot_count: data.snapshots.length,
+    snapshot_rows: snapshotRows,
+    flags_section: flagsSection,
+    sync_url: data.synchronizerUrl,
+  })
+
+  return renderPage({
+    title: `Session: ${data.sessionId.slice(0, 20)}...`,
+    content,
+    activePage: 'sessions',
+    user,
+    cluster,
+  })
+}
+
+// ============================================================================
 // Helpers
 // ============================================================================
 
@@ -997,6 +1153,26 @@ function tierBadgeClass(tier: string): string {
   }
 }
 
-function escapeHtml(str: string): string {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;')
+function escapeHtml(str: unknown): string {
+  const s = String(str ?? '')
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;')
+}
+
+/**
+ * Format userId for display - can be string, object, or array
+ */
+function formatUserId(userId: unknown): string {
+  if (!userId) return ''
+  if (typeof userId === 'string') return userId
+  if (Array.isArray(userId)) return userId.map((u) => (typeof u === 'string' ? u : JSON.stringify(u))).join(', ')
+  if (typeof userId === 'object') {
+    // Try to extract common user fields
+    const u = userId as Record<string, unknown>
+    if (u.name) return String(u.name)
+    if (u.id) return String(u.id)
+    if (u.userId) return String(u.userId)
+    // Fallback to compact JSON
+    return JSON.stringify(userId)
+  }
+  return String(userId)
 }

@@ -1,0 +1,236 @@
+<!-- Session Inspector -->
+<div class="space-y-8">
+  <!-- Header -->
+  <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <div>
+      <div class="flex items-center gap-3 mb-2">
+        <a href="/ui/sessions" class="text-muted-foreground hover:text-foreground transition-colors">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+          </svg>
+        </a>
+        <h2 class="text-2xl font-bold">Session Inspector</h2>
+        <span class="badge {{status_badge}}">{{status}}</span>
+      </div>
+      <div class="font-mono text-sm text-muted-foreground cursor-pointer hover:text-foreground transition-colors" onclick="copyToClipboard('{{session_id}}', 'Session ID')" title="Click to copy">{{session_id}}</div>
+    </div>
+    <div class="flex gap-3">
+      <button onclick="refreshSession()" class="btn btn-secondary">
+        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+        Refresh
+      </button>
+      <button onclick="endSession('{{session_id}}')" class="btn btn-destructive">
+        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+        End Session
+      </button>
+    </div>
+  </div>
+
+  <!-- Overview Cards -->
+  <div class="grid grid-cols-2 sm:grid-cols-4 gap-5">
+    <div class="card p-5">
+      <div class="text-sm text-muted-foreground">Clients</div>
+      <div class="text-3xl font-bold mt-1">{{client_count}}</div>
+    </div>
+    <div class="card p-5">
+      <div class="text-sm text-muted-foreground">Messages Buffered</div>
+      <div class="text-3xl font-bold mt-1">{{messages_buffered}}</div>
+      <div class="text-xs text-muted-foreground mt-1">of {{messages_max}} max</div>
+    </div>
+    <div class="card p-5">
+      <div class="text-sm text-muted-foreground">Session Time</div>
+      <div class="text-3xl font-bold mt-1">{{session_time}}</div>
+    </div>
+    <div class="card p-5">
+      <div class="text-sm text-muted-foreground">Sequence</div>
+      <div class="text-3xl font-bold mt-1">{{session_seq}}</div>
+    </div>
+  </div>
+
+  <!-- Two Column Layout -->
+  <div class="flex flex-col md:flex-row gap-8">
+    <!-- Left Column: Session Details -->
+    <div class="flex-1 space-y-8">
+      <!-- Location -->
+      <div class="card">
+        <div class="p-5 border-b border-border">
+          <h3 class="font-semibold">Location</h3>
+        </div>
+        <div class="p-5 space-y-3">
+          <div class="flex justify-between">
+            <span class="text-muted-foreground">Edge (Worker)</span>
+            <span class="font-mono">{{edge_colo}}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-muted-foreground">Durable Object</span>
+            <span class="font-mono">{{do_colo}}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Timing -->
+      <div class="card">
+        <div class="p-5 border-b border-border">
+          <h3 class="font-semibold">Timing</h3>
+        </div>
+        <div class="p-5 space-y-3">
+          <div class="flex justify-between">
+            <span class="text-muted-foreground">Tick Interval</span>
+            <span>{{tick_interval}}ms</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-muted-foreground">Time Scale</span>
+            <span>{{time_scale}}x</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-muted-foreground">Created</span>
+            <span>{{created_at}}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-muted-foreground">Last Activity</span>
+            <span>{{last_activity}}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Snapshot Info -->
+      <div class="card">
+        <div class="p-5 border-b border-border">
+          <h3 class="font-semibold">Snapshot State</h3>
+        </div>
+        <div class="p-5 space-y-3">
+          <div class="flex justify-between">
+            <span class="text-muted-foreground">Last Snapshot Time</span>
+            <span>{{snapshot_time}}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-muted-foreground">Last Snapshot Seq</span>
+            <span>{{snapshot_seq}}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-muted-foreground">Has Snapshot</span>
+            <span class="badge {{snapshot_badge}}">{{has_snapshot}}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-muted-foreground">Persistent Data</span>
+            <span class="badge {{persistent_badge}}">{{has_persistent}}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Metrics -->
+      <div class="card">
+        <div class="p-5 border-b border-border">
+          <h3 class="font-semibold">Metrics</h3>
+        </div>
+        <div class="p-5 space-y-3">
+          <div class="flex justify-between">
+            <span class="text-muted-foreground">Messages Total</span>
+            <span class="font-semibold">{{metrics_messages}}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-muted-foreground">Ticks Total</span>
+            <span class="font-semibold">{{metrics_ticks}}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-muted-foreground">Active Tallies</span>
+            <span>{{tallies_count}}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Column: Clients & Snapshots -->
+    <div class="flex-1 space-y-8">
+      <!-- Connected Clients -->
+      <div class="card">
+        <div class="p-5 border-b border-border">
+          <h3 class="font-semibold">Connected Clients ({{client_count}})</h3>
+        </div>
+        <div class="divide-y divide-border">
+          {{client_rows}}
+        </div>
+      </div>
+
+      <!-- Snapshots -->
+      <div class="card">
+        <div class="p-5 border-b border-border flex items-center justify-between">
+          <h3 class="font-semibold">Snapshots ({{snapshot_count}})</h3>
+          <button onclick="refreshSnapshots()" class="btn btn-ghost btn-sm">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+          </button>
+        </div>
+        <div class="divide-y divide-border" id="snapshots-list">
+          {{snapshot_rows}}
+        </div>
+      </div>
+
+      <!-- Flags -->
+      {{flags_section}}
+    </div>
+  </div>
+</div>
+
+<script>
+  function refreshSession() {
+    location.reload();
+  }
+
+  async function refreshSnapshots() {
+    try {
+      const res = await fetch('{{sync_url}}/session/{{session_id_encoded}}/snapshots');
+      if (!res.ok) throw new Error('Failed to fetch snapshots');
+      const data = await res.json();
+
+      const container = document.getElementById('snapshots-list');
+      if (data.snapshots && data.snapshots.length > 0) {
+        container.innerHTML = data.snapshots.map(s => `
+          <div class="p-4 hover:bg-secondary/30 transition-colors">
+            <div class="flex items-center justify-between">
+              <div>
+                <div class="font-mono text-sm">seq: ${s.seq}, time: ${s.time}</div>
+                <div class="text-xs text-muted-foreground mt-1">${s.createdAtHuman}</div>
+              </div>
+              <span class="badge">${s.sizeHuman}</span>
+            </div>
+          </div>
+        `).join('');
+      } else {
+        container.innerHTML = '<div class="p-6 text-center text-muted-foreground">No snapshots stored</div>';
+      }
+      showToast('Snapshots refreshed');
+    } catch (err) {
+      showToast('Error: ' + err.message);
+    }
+  }
+
+  async function endSession(sessionId) {
+    const confirmed = await showConfirm('End this session? All connected clients will be disconnected.', {
+      title: 'End Session',
+      confirmText: 'End Session',
+      danger: true,
+    });
+    if (!confirmed) return;
+
+    try {
+      const res = await fetch('/sessions/' + encodeURIComponent(sessionId), { method: 'DELETE' });
+      if (!res.ok) throw new Error(await res.text());
+      showToast('Session ended');
+      setTimeout(() => window.location.href = '/ui/sessions', 1000);
+    } catch (err) {
+      showToast('Error: ' + err.message);
+    }
+  }
+
+  function copyToClipboard(text, label) {
+    navigator.clipboard.writeText(text).then(() => {
+      showToast(label + ' copied to clipboard');
+    });
+  }
+</script>
