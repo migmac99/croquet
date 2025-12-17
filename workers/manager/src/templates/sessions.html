@@ -8,6 +8,10 @@
       <option value="">All accounts</option>
       {{account_options}}
     </select>
+    <label class="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer select-none">
+      <input type="checkbox" id="includeR2" onchange="toggleIncludeR2()" {{include_r2_checked}} class="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-primary focus:ring-primary focus:ring-offset-0" />
+      Include archived
+    </label>
     <div class="flex gap-3">
       <button onclick="location.reload()" class="btn btn-outline flex-1 sm:flex-none">
         <svg class="w-4 h-4 mr-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -45,6 +49,7 @@
       <thead class="bg-secondary/50">
         <tr class="text-left text-sm text-muted-foreground">
           <th class="px-6 py-4 font-medium">Session ID</th>
+          <th class="px-6 py-4 font-medium">Status</th>
           <th class="px-6 py-4 font-medium">App</th>
           <th class="px-6 py-4 font-medium">API Key</th>
           <th class="px-6 py-4 font-medium">Account</th>

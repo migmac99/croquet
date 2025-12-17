@@ -310,11 +310,19 @@ export function renderSessionsPage(
     accountName?: string
     colo?: string
     region?: string
+    status?: string
   }>,
   accounts: Array<{ id: string; name: string }>,
   user: string,
-  cluster: string
+  cluster: string,
+  includeR2 = false
 ): string {
+  // Helper to render status badge
+  const getStatusBadge = (s: { status?: string; clientCount: number }) => {
+    if (s.status === 'archived') return '<span class="px-2 py-0.5 text-xs rounded bg-zinc-700 text-zinc-300">archived</span>'
+    if (s.status === 'inactive' || s.clientCount === 0) return '<span class="px-2 py-0.5 text-xs rounded bg-yellow-900/50 text-yellow-400">inactive</span>'
+    return '<span class="px-2 py-0.5 text-xs rounded bg-green-900/50 text-green-400">active</span>'
+  }
   // Create account lookup map
   const accountMap = new Map(accounts.map((a) => [a.id, a.name]))
 
@@ -324,10 +332,13 @@ export function renderSessionsPage(
       ? sessions
           .map(
             (s) => `
-    <div class="card p-6 space-y-4" data-account-id="${s.accountId || ''}">
+    <div class="card p-6 space-y-4" data-account-id="${s.accountId || ''}" data-status="${s.status || 'active'}">
       <div class="flex items-start justify-between gap-3">
         <a href="/ui/session/${encodeURIComponent(s.sessionId)}" class="font-mono text-xs truncate flex-1 hover:text-primary transition-colors" title="Inspect session">${escapeHtml(s.sessionId)}</a>
-        <span class="badge shrink-0 cursor-pointer hover:opacity-80" onclick="copyToClipboard('${escapeHtml(s.appId || 'Unknown')}', 'App ID')" title="Click to copy">${escapeHtml(s.appId || 'Unknown')}</span>
+        <div class="flex items-center gap-2 shrink-0">
+          ${getStatusBadge(s)}
+          <span class="badge cursor-pointer hover:opacity-80" onclick="copyToClipboard('${escapeHtml(s.appId || 'Unknown')}', 'App ID')" title="Click to copy">${escapeHtml(s.appId || 'Unknown')}</span>
+        </div>
       </div>
       ${s.apiKeyName ? `<div class="text-xs text-muted-foreground">API Key: <span class="font-medium">${escapeHtml(s.apiKeyName)}</span></div>` : ''}
       ${s.accountId ? `<div class="text-xs text-muted-foreground cursor-pointer hover:text-foreground transition-colors" onclick="copyToClipboard('${s.accountId}', 'Account ID')" title="Click to copy">Account: <span class="font-medium">${escapeHtml(s.accountName || accountMap.get(s.accountId) || s.accountId)}</span></div>` : ''}
@@ -341,7 +352,7 @@ export function renderSessionsPage(
       </div>
       <div class="flex items-center justify-between text-xs text-muted-foreground">
         <span>Last activity</span>
-        <span>${formatTimeAgo(s.lastSeen)}</span>
+        <span>${s.lastSeen ? formatTimeAgo(s.lastSeen) : '—'}</span>
       </div>
       <div class="pt-3 border-t border-border flex gap-2">
         <a href="/ui/session/${encodeURIComponent(s.sessionId)}" class="btn btn-ghost btn-sm flex-1">Inspect</a>
@@ -359,9 +370,12 @@ export function renderSessionsPage(
       ? sessions
           .map(
             (s) => `
-    <tr class="border-b border-border hover:bg-secondary/30 transition-colors" data-account-id="${s.accountId || ''}">
+    <tr class="border-b border-border hover:bg-secondary/30 transition-colors" data-account-id="${s.accountId || ''}" data-status="${s.status || 'active'}">
       <td class="px-6 py-5">
         <a href="/ui/session/${encodeURIComponent(s.sessionId)}" class="font-mono text-sm truncate max-w-xs block hover:text-primary transition-colors" title="Inspect session">${escapeHtml(s.sessionId)}</a>
+      </td>
+      <td class="px-6 py-5">
+        ${getStatusBadge(s)}
       </td>
       <td class="px-6 py-5">
         <span class="badge cursor-pointer hover:opacity-80" onclick="copyToClipboard('${escapeHtml(s.appId || 'Unknown')}', 'App ID')" title="Click to copy">${escapeHtml(s.appId || 'Unknown')}</span>
@@ -379,10 +393,10 @@ export function renderSessionsPage(
         ${s.region || s.colo || '—'}
       </td>
       <td class="px-6 py-5 text-sm text-muted-foreground whitespace-nowrap">
-        ${new Date(s.createdAt).toLocaleString()}
+        ${s.createdAt ? new Date(s.createdAt).toLocaleString() : '—'}
       </td>
       <td class="px-6 py-5 text-sm text-muted-foreground whitespace-nowrap">
-        ${formatTimeAgo(s.lastSeen)}
+        ${s.lastSeen ? formatTimeAgo(s.lastSeen) : '—'}
       </td>
       <td class="px-6 py-5 whitespace-nowrap">
         <div class="flex gap-2">
@@ -394,7 +408,7 @@ export function renderSessionsPage(
   `
           )
           .join('')
-      : '<tr><td colspan="9" class="p-10 text-center text-muted-foreground">No active sessions</td></tr>'
+      : '<tr><td colspan="10" class="p-10 text-center text-muted-foreground">No active sessions</td></tr>'
 
   // Generate account options for the filter dropdown
   const accountOptions = accounts.map((a) => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)}</option>`).join('')
@@ -403,6 +417,7 @@ export function renderSessionsPage(
     session_cards: sessionCards,
     session_rows: sessionRows,
     account_options: accountOptions,
+    include_r2_checked: includeR2 ? 'checked' : '',
   })
 
   return renderPage({

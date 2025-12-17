@@ -261,7 +261,7 @@ export default {
 
       if (path === '/' || path === '/dashboard') return await getDashboardUI(env, user) // Dashboard UI
       if (path === '/ui/keys') return await getKeysUI(env, user) // Keys UI
-      if (path === '/ui/sessions') return await getSessionsUI(env, user) // Sessions UI
+      if (path === '/ui/sessions') return await getSessionsUI(env, user, url.searchParams.get('includeR2') === 'true') // Sessions UI
       if (path === '/ui/accounts') return await getAccountsUI(env, user) // Accounts UI
       if (path === '/ui/synchronizers') return await getSynchronizersUI(env, user) // Synchronizers UI
       if (path === '/ui/map') return await getMapUI(env, user) // Map UI
@@ -1490,20 +1490,54 @@ async function getKeysUI(env: Env, user: AuthenticatedUser): Promise<Response> {
   return html(renderKeysPage(keys, accounts, user.email, env.CLUSTER_LABEL))
 }
 
-async function getSessionsUI(env: Env, user: AuthenticatedUser): Promise<Response> {
+async function getSessionsUI(env: Env, user: AuthenticatedUser, includeR2 = false): Promise<Response> {
   const sessions: SessionRecord[] = []
+  const seenIds = new Set<string>()
 
+  // 1. List sessions from KV (active + recently inactive)
   let cursor: string | undefined
   do {
     const result = await env.SESSIONS.list({ cursor })
     for (const key of result.keys) {
       const record = await env.SESSIONS.get<SessionRecord>(key.name, 'json')
-      if (record) sessions.push(record)
+      if (record) {
+        sessions.push(record)
+        seenIds.add(record.sessionId)
+      }
     }
     cursor = result.list_complete ? undefined : result.cursor
   } while (cursor)
 
-  // Sort by lastSeen descending
+  // 2. Optionally fetch sessions from R2 (historical sessions with snapshots)
+  if (includeR2 && env.SYNCHRONIZER_URL) {
+    try {
+      const syncUrl = env.SYNCHRONIZER_URL.replace(/^ws/, 'http')
+      const r2Response = await fetch(`${syncUrl}/sessions/r2?limit=500`)
+      if (r2Response.ok) {
+        const r2Data = (await r2Response.json()) as { sessions: Array<{ sessionId: string }> }
+        const r2Sessions = r2Data.sessions || []
+
+        // Add R2-only sessions (not in KV) as "archived" entries
+        for (const r2Session of r2Sessions) {
+          if (!seenIds.has(r2Session.sessionId)) {
+            sessions.push({
+              sessionId: r2Session.sessionId,
+              clientCount: 0,
+              status: 'archived', // Has snapshots in R2 but no KV record
+              synchronizerUrl: env.SYNCHRONIZER_URL,
+              lastSeen: 0,
+              createdAt: 0,
+            } as SessionRecord)
+            seenIds.add(r2Session.sessionId)
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch R2 sessions:', err)
+    }
+  }
+
+  // Sort by lastSeen descending (archived sessions will be at the end)
   sessions.sort((a, b) => b.lastSeen - a.lastSeen)
 
   // Build a map of apiKeyId -> { accountId, name } by looking up keys
@@ -1552,7 +1586,7 @@ async function getSessionsUI(env: Env, user: AuthenticatedUser): Promise<Respons
     }
   })
 
-  return html(renderSessionsPage(enrichedSessions, accounts, user.email, env.CLUSTER_LABEL))
+  return html(renderSessionsPage(enrichedSessions, accounts, user.email, env.CLUSTER_LABEL, includeR2))
 }
 
 async function getAccountsUI(env: Env, user: AuthenticatedUser): Promise<Response> {

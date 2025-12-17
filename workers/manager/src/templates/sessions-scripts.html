@@ -1,4 +1,15 @@
 <script>
+  function toggleIncludeR2() {
+    const checked = document.getElementById('includeR2').checked
+    const url = new URL(window.location.href)
+    if (checked) {
+      url.searchParams.set('includeR2', 'true')
+    } else {
+      url.searchParams.delete('includeR2')
+    }
+    window.location.href = url.toString()
+  }
+
   async function deleteSession(id) {
     const confirmed = await showConfirm('End this session? All connected clients will be disconnected.', {
       title: 'End Session',
