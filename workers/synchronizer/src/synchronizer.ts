@@ -58,6 +58,7 @@ export class Synchronizer extends DurableObject<Env> {
   private sessionName: string | null = null // Logical session name (from URL path)
   private usersTimer: ReturnType<typeof setTimeout> | null = null // Timer for batched users events
   private trackedInKV = false // Track if we've registered session in SESSIONS KV
+  private trackedAppId: string | undefined // Store appId for KV updates
   private lastSessionUpdate = 0 // Track last update to SESSIONS KV
   private colo: string | null = null // Client edge datacenter code (from request.cf.colo)
   private doColo: string | null = null // DO's actual location (detected via cdn-cgi/trace)
@@ -1287,6 +1288,9 @@ export class Synchronizer extends DurableObject<Env> {
     if (!this.env.SESSIONS) return
     if (this.trackedInKV) return
 
+    // Store appId for later updates
+    if (appId) this.trackedAppId = appId
+
     try {
       const ttl = parseInt(this.env.SESSION_TTL_SECONDS || '300', 10)
       const record = {
@@ -1299,6 +1303,7 @@ export class Synchronizer extends DurableObject<Env> {
         lat: this.env.SYNC_LAT ? parseFloat(this.env.SYNC_LAT) : undefined,
         lon: this.env.SYNC_LON ? parseFloat(this.env.SYNC_LON) : undefined,
         region: this.env.SYNC_REGION,
+        metrics: this.metrics,
         clientLocations: this.getClientLocations(),
         createdAt: Date.now(),
         lastSeen: Date.now(),
@@ -1348,6 +1353,7 @@ export class Synchronizer extends DurableObject<Env> {
       const ttl = parseInt(this.env.SESSION_TTL_SECONDS || '300', 10)
       const record = {
         sessionId: this.sessionId,
+        appId: this.trackedAppId,
         synchronizerUrl: this.env.CLUSTER_LABEL || 'synq',
         clientCount,
         colo: this.colo,

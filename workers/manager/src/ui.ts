@@ -681,13 +681,13 @@ export function renderMetricsPage(
   const maxBucket = Math.max(...totals.latencyBuckets, 1)
   const latencyChart =
     totals.latencyCount > 0
-      ? `<div class="flex items-end justify-between gap-1 h-full">
+      ? `<div class="flex items-end gap-1 h-full pb-6">
         ${LATENCY_BUCKETS.map((bucket, i) => {
-          const height = Math.max((totals.latencyBuckets[i] / maxBucket) * 100, 2)
+          const height = Math.max((totals.latencyBuckets[i] / maxBucket) * 100, 4)
           const count = totals.latencyBuckets[i]
-          return `<div class="flex-1 flex flex-col items-center gap-1">
-            <div class="w-full bg-primary/80 rounded-t transition-all hover:bg-primary" style="height: ${height}%" title="${count} requests <= ${bucket}ms"></div>
-            <span class="text-xs text-muted-foreground">${bucket}</span>
+          return `<div class="flex-1 relative h-full group">
+            <div class="absolute bottom-0 left-0 right-0 bg-primary/80 rounded-t transition-all hover:bg-primary cursor-pointer" style="height: ${height}%" title="${count} requests ≤ ${bucket}ms"></div>
+            <span class="absolute -bottom-6 left-1/2 -translate-x-1/2 text-xs text-muted-foreground whitespace-nowrap">${bucket}</span>
           </div>`
         }).join('')}
       </div>`
