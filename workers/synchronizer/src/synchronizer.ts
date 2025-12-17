@@ -1281,7 +1281,7 @@ export class Synchronizer extends DurableObject<Env> {
         region: this.env.SYNC_REGION,
         clientLocations: this.getClientLocations(),
         createdAt: Date.now(),
-        updatedAt: Date.now(),
+        lastSeen: Date.now(),
       }
 
       await this.env.SESSIONS.put(`session:${this.sessionId}`, JSON.stringify(record), { expirationTtl: ttl })
@@ -1328,12 +1328,13 @@ export class Synchronizer extends DurableObject<Env> {
       const ttl = parseInt(this.env.SESSION_TTL_SECONDS || '300', 10)
       const record = {
         sessionId: this.sessionId,
+        synchronizerUrl: this.env.CLUSTER_LABEL || 'synq',
         clientCount,
         colo: this.colo,
         doColo: this.doColo,
         metrics: this.metrics,
         clientLocations: this.getClientLocations(),
-        updatedAt: Date.now(),
+        lastSeen: Date.now(),
       }
 
       await this.env.SESSIONS.put(`session:${this.sessionId}`, JSON.stringify(record), { expirationTtl: ttl })

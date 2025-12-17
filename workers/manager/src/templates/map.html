@@ -50,29 +50,33 @@
   <div class="text-sm font-medium mb-3">Legend</div>
   <div class="flex flex-wrap gap-6 text-sm text-muted-foreground" id="legend-items">
     <div class="flex items-center gap-2">
-      <div class="w-4 h-4 rounded-full bg-emerald-500"></div>
-      <span>Client edge (where clients connect)</span>
-    </div>
-    <div class="flex items-center gap-2">
       <div class="w-3 h-3 rounded-full bg-violet-500"></div>
-      <span>DO location (where session runs)</span>
+      <span>DO (Durable Object)</span>
     </div>
     <div class="flex items-center gap-2">
-      <div class="w-8 h-0.5 bg-amber-500 opacity-60" style="border-top: 2px dashed"></div>
-      <span>Edge to DO connection</span>
+      <div class="w-4 h-4 rounded-full bg-emerald-500"></div>
+      <span>Worker (edge location)</span>
     </div>
     <div class="flex items-center gap-2">
-      <div class="w-3 h-3 rounded-full bg-emerald-500 opacity-50"></div>
-      <span>Size = session count</span>
+      <div class="w-8 h-0.5 bg-emerald-400 opacity-60" style="border-top: 2px dashed"></div>
+      <span>Worker → DO</span>
     </div>
     <!-- Client tracking legend items (shown when tracking enabled) -->
     <div class="flex items-center gap-2 client-legend hidden">
-      <div class="w-3 h-3 rounded-full bg-cyan-500"></div>
-      <span>Session leader</span>
+      <div class="w-3 h-3 rounded-full bg-blue-500"></div>
+      <span>Lead user</span>
     </div>
     <div class="flex items-center gap-2 client-legend hidden">
-      <div class="w-3 h-3 rounded-full bg-emerald-500 opacity-40"></div>
-      <span>Session follower</span>
+      <div class="w-3 h-3 rounded-full bg-gray-400"></div>
+      <span>User (client)</span>
+    </div>
+    <div class="flex items-center gap-2 client-legend hidden">
+      <div class="w-8 h-0.5 bg-blue-400 opacity-60" style="border-top: 2px dashed"></div>
+      <span>Leader → DO</span>
+    </div>
+    <div class="flex items-center gap-2 client-legend hidden">
+      <div class="w-8 h-0.5 bg-gray-400 opacity-50" style="border-top: 2px dashed"></div>
+      <span>Client → DO</span>
     </div>
   </div>
 </div>
@@ -145,7 +149,7 @@
           L.polyline(
             [[edgeLat, edgeLon], [doLoc.lat, doLoc.lon]],
             {
-              color: '#f59e0b', // Amber color
+              color: '#10b981', // Green to match worker/edge markers
               weight: 2,
               opacity: 0.6,
               dashArray: '5, 5'
@@ -170,9 +174,9 @@
           L.polyline(
             [[client.lat, client.lon], [client.doLat, client.doLon]],
             {
-              color: client.isLeader ? '#06b6d4' : '#10b981', // Cyan for leader, green for follower
+              color: client.isLeader ? '#3b82f6' : '#9ca3af', // Blue for leader, gray for clients
               weight: 1.5,
-              opacity: client.isLeader ? 0.8 : 0.4,
+              opacity: client.isLeader ? 0.8 : 0.5,
               dashArray: '3, 3'
             }
           ).addTo(map);
@@ -184,7 +188,7 @@
       });
     }
 
-    // Third pass: add edge location markers (aggregated view)
+    // Third pass: add edge location markers (aggregated view) - GREEN for Worker
     L.geoJSON(geoJsonData, {
       pointToLayer: function(feature, latlng) {
         const props = feature.properties;
@@ -192,7 +196,7 @@
 
         return L.circleMarker(latlng, {
           radius: radius,
-          fillColor: '#10b981',
+          fillColor: '#10b981', // Green for worker/edge
           color: '#059669',
           weight: 2,
           opacity: 1,
@@ -225,14 +229,14 @@
         const isLeader = client.isLeader;
         L.circleMarker([client.lat, client.lon], {
           radius: isLeader ? 6 : 4,
-          fillColor: isLeader ? '#06b6d4' : '#10b981', // Cyan for leader, green for follower
-          color: isLeader ? '#0891b2' : '#059669',
+          fillColor: isLeader ? '#3b82f6' : '#9ca3af', // Blue for leader, gray for clients
+          color: isLeader ? '#2563eb' : '#6b7280',
           weight: 2,
           opacity: 1,
-          fillOpacity: isLeader ? 0.9 : 0.4
+          fillOpacity: isLeader ? 0.9 : 0.7
         }).addTo(map).bindPopup(`
           <div class="p-2">
-            <div class="font-bold text-base mb-2">${isLeader ? 'Session Leader' : 'Session Follower'}</div>
+            <div class="font-bold text-base mb-2">${isLeader ? 'Session Leader' : 'Connecting Client'}</div>
             <div class="space-y-1 text-sm">
               <div><span class="text-gray-500">Edge:</span> ${client.colo}</div>
               <div><span class="text-gray-500">DO:</span> ${client.doColo}</div>

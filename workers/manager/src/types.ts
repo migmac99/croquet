@@ -15,7 +15,6 @@ export interface Env {
   // Config
   SYNCHRONIZER_URL: string
   CLUSTER_LABEL: string
-  REGISTRY_URL?: string // URL to registry worker (for synchronizers endpoint)
 }
 
 /**
@@ -317,3 +316,4 @@ export type SettingKey =
   | 'require_api_key' // Require API key for session creation
   | 'max_sessions_per_synchronizer' // Max sessions per synchronizer
   | 'track_client_locations' // Track individual client connection locations for map display
+  | 'snapshot_retention_days' // How many days to keep inactive session snapshots (0 = forever)

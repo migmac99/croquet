@@ -897,6 +897,7 @@ export function renderSettingsPage(
     require_api_key: boolean
     max_sessions_per_synchronizer: number
     track_client_locations: boolean
+    snapshot_retention_days: number
   },
   user: string,
   cluster: string
@@ -906,6 +907,7 @@ export function renderSettingsPage(
     require_api_key_checked: settings.require_api_key ? 'checked' : '',
     max_sessions_per_synchronizer: settings.max_sessions_per_synchronizer,
     track_client_locations_checked: settings.track_client_locations ? 'checked' : '',
+    snapshot_retention_days: settings.snapshot_retention_days,
   })
 
   return renderPage({

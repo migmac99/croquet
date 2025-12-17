@@ -51,12 +51,10 @@ export interface WSAttachment {
 // ============================================================================
 
 /** Build a RECV message (broadcast to clients) */
-export const buildRecvMessage = (sessionId: string, args: unknown[]): string =>
-  JSON.stringify({ id: sessionId, action: 'RECV', args })
+export const buildRecvMessage = (sessionId: string, args: unknown[]): string => JSON.stringify({ id: sessionId, action: 'RECV', args })
 
 /** Build a TICK message */
-export const buildTickMessage = (sessionId: string, time: number): string =>
-  JSON.stringify({ id: sessionId, action: 'TICK', args: time })
+export const buildTickMessage = (sessionId: string, time: number): string => JSON.stringify({ id: sessionId, action: 'TICK', args: time })
 
 /** Build a PONG message */
 export const buildPongMessage = (sessionId: string, clientTime: number, serverTime: number): string =>
@@ -78,12 +76,10 @@ export const buildSyncMessage = (
 ): string => JSON.stringify({ id: sessionId, action: 'SYNC', args })
 
 /** Build a REQU message (snapshot request) */
-export const buildRequMessage = (sessionId: string, time: number, seq: number): string =>
-  JSON.stringify({ id: sessionId, action: 'REQU', args: { time, seq } })
+export const buildRequMessage = (sessionId: string, time: number, seq: number): string => JSON.stringify({ id: sessionId, action: 'REQU', args: { time, seq } })
 
 /** Build an INFO message */
-export const buildInfoMessage = (sessionId: string, info: Record<string, unknown>): string =>
-  JSON.stringify({ id: sessionId, action: 'INFO', args: info })
+export const buildInfoMessage = (sessionId: string, info: Record<string, unknown>): string => JSON.stringify({ id: sessionId, action: 'INFO', args: info })
 
 // ============================================================================
 // Attachment Helpers
@@ -125,5 +121,4 @@ export const updateLastSeen = (att: WSAttachment): WSAttachment => ({
 export const isActiveClient = (att: WSAttachment | null | undefined): boolean => att?.active === true
 
 /** Check if client has joined but not yet active */
-export const isJoinedNotActive = (att: WSAttachment | null | undefined): boolean =>
-  att?.joined === true && att?.active === false
+export const isJoinedNotActive = (att: WSAttachment | null | undefined): boolean => att?.joined === true && att?.active === false

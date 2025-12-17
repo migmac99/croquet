@@ -120,6 +120,31 @@
         </label>
       </div>
     </div>
+
+    <!-- Snapshot Retention -->
+    <div class="card p-6">
+      <div class="flex items-center justify-between gap-4">
+        <div class="flex-1">
+          <h3 class="text-lg font-semibold mb-1">Snapshot Retention</h3>
+          <p class="text-sm text-muted-foreground">
+            Number of days to keep inactive session snapshots before automatic deletion. Set to 0 to keep snapshots forever.
+            <span class="block mt-1 text-xs text-muted-foreground/70">Common values: 30 (1 month), 90 (3 months), 180 (6 months), 365 (1 year)</span>
+          </p>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+          <input
+            type="number"
+            id="input-snapshot_retention_days"
+            class="flex h-10 w-28 rounded-md border border-slate-400 bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary disabled:cursor-not-allowed disabled:opacity-50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+            value="{{snapshot_retention_days}}"
+            min="0"
+            placeholder="days"
+            onchange="updateNumberSetting('snapshot_retention_days', this.value)"
+          />
+          <span class="text-sm text-muted-foreground">days</span>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Info Card -->

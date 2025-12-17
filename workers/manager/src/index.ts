@@ -413,6 +413,58 @@ export default {
       return error('Internal server error', 500)
     }
   },
+
+  /**
+   * Scheduled handler for maintenance tasks
+   * Runs daily to clean up old snapshots based on retention setting
+   */
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    console.log(`[Scheduled] Running snapshot retention cleanup at ${new Date().toISOString()}`)
+
+    // Get retention setting
+    const retentionRecord = await env.SETTINGS.get<SettingsRecord>('setting:snapshot_retention_days', 'json')
+    const retentionDays = (retentionRecord?.value as number) ?? 180 // Default: 6 months
+
+    // Skip if retention is 0 (keep forever)
+    if (retentionDays === 0) {
+      console.log('[Scheduled] Snapshot retention set to 0 (forever) - skipping cleanup')
+      return
+    }
+
+    const cutoffDate = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000)
+    console.log(`[Scheduled] Deleting snapshots older than ${cutoffDate.toISOString()} (${retentionDays} days)`)
+
+    // Skip if R2 bucket not configured
+    if (!env.SNAPSHOTS) {
+      console.log('[Scheduled] SNAPSHOTS R2 bucket not configured - skipping')
+      return
+    }
+
+    let deletedCount = 0
+    let scannedCount = 0
+    let cursor: string | undefined
+
+    do {
+      const list = await env.SNAPSHOTS.list({ cursor, limit: 500 })
+
+      for (const obj of list.objects) {
+        scannedCount++
+        // Check if object is older than retention cutoff
+        if (obj.uploaded && obj.uploaded < cutoffDate) {
+          try {
+            await env.SNAPSHOTS.delete(obj.key)
+            deletedCount++
+          } catch (err) {
+            console.error(`[Scheduled] Failed to delete ${obj.key}:`, err)
+          }
+        }
+      }
+
+      cursor = list.truncated ? list.cursor : undefined
+    } while (cursor)
+
+    console.log(`[Scheduled] Cleanup complete: scanned ${scannedCount}, deleted ${deletedCount} old snapshots`)
+  },
 }
 
 // ============================================================================
@@ -1239,6 +1291,12 @@ async function getSetting(key: string, env: Env): Promise<Response> {
         description: 'Track individual client connection locations for map display',
         lastModified: 0,
       },
+      snapshot_retention_days: {
+        key: 'snapshot_retention_days',
+        value: 180,
+        description: 'Days to keep inactive session snapshots (0 = forever)',
+        lastModified: 0,
+      },
     }
     const defaultRecord = defaults[key as SettingKey]
     if (defaultRecord) return json(defaultRecord)
@@ -2044,6 +2102,7 @@ async function getSettingsUI(env: Env, user: AuthenticatedUser): Promise<Respons
     require_api_key: await getSettingValue('require_api_key', true),
     max_sessions_per_synchronizer: await getSettingValue('max_sessions_per_synchronizer', 1000),
     track_client_locations: await getSettingValue('track_client_locations', false),
+    snapshot_retention_days: await getSettingValue('snapshot_retention_days', 180), // Default: 6 months
   }
 
   return html(renderSettingsPage(settings, user.email, env.CLUSTER_LABEL))
