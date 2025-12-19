@@ -904,44 +904,54 @@ export function renderStoragePage(
           .join('')
       : '<div class="p-10 text-center text-muted-foreground">No recent keys</div>'
 
-  // Generate snapshot statistics section
-  const snapshotStatsHtml = snapshotMetrics
-    ? `
+  // Generate snapshot statistics section (always show, use defaults if no data)
+  const metrics = snapshotMetrics || {
+    totalSessions: 0,
+    totalSnapshots: 0,
+    totalSize: 0,
+    avgSnapshotsPerSession: 0,
+    avgSizePerSession: 0,
+    avgSnapshotSize: 0,
+  }
+  const snapshotStatsHtml = `
     <div class="card">
       <div class="p-6 border-b border-border">
         <h3 class="font-semibold">Snapshot Statistics</h3>
         <p class="text-sm text-muted-foreground mt-1">R2 storage breakdown for session snapshots</p>
       </div>
-      <div class="p-6">
-        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-6">
-          <div>
+      <div class="p-6 space-y-6">
+        <!-- Row 1: Totals -->
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-6">
+          <div class="p-4 bg-secondary/30 rounded-lg">
             <div class="text-muted-foreground text-sm font-medium">Sessions with Snapshots</div>
-            <div class="text-2xl font-bold mt-1">${formatNumber(snapshotMetrics.totalSessions)}</div>
+            <div class="text-3xl font-bold mt-2">${formatNumber(metrics.totalSessions)}</div>
           </div>
-          <div>
+          <div class="p-4 bg-secondary/30 rounded-lg">
             <div class="text-muted-foreground text-sm font-medium">Total Snapshots</div>
-            <div class="text-2xl font-bold mt-1">${formatNumber(snapshotMetrics.totalSnapshots)}</div>
+            <div class="text-3xl font-bold mt-2">${formatNumber(metrics.totalSnapshots)}</div>
           </div>
-          <div>
+          <div class="p-4 bg-secondary/30 rounded-lg">
             <div class="text-muted-foreground text-sm font-medium">Total Size</div>
-            <div class="text-2xl font-bold mt-1">${formatSize(snapshotMetrics.totalSize)}</div>
+            <div class="text-3xl font-bold mt-2">${formatSize(metrics.totalSize)}</div>
           </div>
-          <div>
-            <div class="text-muted-foreground text-sm font-medium">Avg. Snapshots/Session</div>
-            <div class="text-2xl font-bold mt-1">${snapshotMetrics.avgSnapshotsPerSession.toFixed(1)}</div>
+        </div>
+        <!-- Row 2: Averages -->
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-6">
+          <div class="p-4 bg-secondary/30 rounded-lg">
+            <div class="text-muted-foreground text-sm font-medium">Avg. Snapshots per Session</div>
+            <div class="text-3xl font-bold mt-2">${metrics.avgSnapshotsPerSession.toFixed(1)}</div>
           </div>
-          <div>
-            <div class="text-muted-foreground text-sm font-medium">Avg. Size/Session</div>
-            <div class="text-2xl font-bold mt-1">${formatSize(snapshotMetrics.avgSizePerSession)}</div>
+          <div class="p-4 bg-secondary/30 rounded-lg">
+            <div class="text-muted-foreground text-sm font-medium">Avg. Size per Session</div>
+            <div class="text-3xl font-bold mt-2">${formatSize(metrics.avgSizePerSession)}</div>
           </div>
-          <div>
+          <div class="p-4 bg-secondary/30 rounded-lg">
             <div class="text-muted-foreground text-sm font-medium">Avg. Snapshot Size</div>
-            <div class="text-2xl font-bold mt-1">${formatSize(snapshotMetrics.avgSnapshotSize)}</div>
+            <div class="text-3xl font-bold mt-2">${formatSize(metrics.avgSnapshotSize)}</div>
           </div>
         </div>
       </div>
     </div>`
-    : ''
 
   const content = render(storageTemplate, {
     total_keys: formatNumber(totalKeys),
