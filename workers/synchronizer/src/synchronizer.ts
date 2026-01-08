@@ -5,7 +5,7 @@ import { now, generateTimeline, after, advanceTime, getRawTime, getScaledTime } 
 import { TALLY_INTERVAL, MAX_TALLY_AGE, MAX_COMPLETED_TALLIES } from './tally'
 import { USERS_INTERVAL, INITIAL_SEQ } from './users'
 import { type ClientLocation, buildClientLocations } from './session-tracker'
-import { type IncomingMessage, type WSAttachment } from './protocol'
+import { type IncomingMessage, type WSAttachment, buildRequMessage } from './protocol'
 import { arrayBufferToBase64, base64ToArrayBuffer, detectColoFromTrace } from './utils'
 
 // ============================================================================
@@ -55,6 +55,7 @@ export class Synchronizer extends DurableObject<Env> {
   private storage: SnapshotStorage | null = null
   private lastSnapshotPrune = 0
   private pendingSnapshot: { clientId: string; time: number } | null = null
+  private pendingInitialSnapshot = false // Request snapshot after first USERS event for fresh sessions
   private sessionName: string | null = null // Logical session name (from URL path)
   private usersTimer: ReturnType<typeof setTimeout> | null = null // Timer for batched users events
   private trackedInKV = false // Track if we've registered session in SESSIONS KV
@@ -476,6 +477,33 @@ export class Synchronizer extends DurableObject<Env> {
     // syncTime is the time at the snapshot (or 0 for fresh init)
     const syncTime = clientMustInitFresh ? 0 : snapshotTime
 
+    // Validate message buffer consistency with snapshot
+    // This catches corruption from hibernation/wake or stale state
+    let stateWasCorrected = false
+    if (!clientMustInitFresh && this.state.messages.length > 0) {
+      const firstMsgSeq = (this.state.messages[0] as number[])?.[1]
+      const lastMsgSeq = (this.state.messages[this.state.messages.length - 1] as number[])?.[1]
+
+      // First message should be after snapshot seq
+      if (firstMsgSeq !== undefined && !after(snapshotSeq, firstMsgSeq)) {
+        console.warn(
+          `[${this.sessionId}] Message buffer inconsistent: first msg seq=${firstMsgSeq} should be after snapshot seq=${snapshotSeq}. Clearing stale messages.`
+        )
+        this.state.messages = []
+        stateWasCorrected = true
+      }
+      // Current seq should match or be after last message seq
+      else if (lastMsgSeq !== undefined && after(this.state.seq, lastMsgSeq)) {
+        console.warn(`[${this.sessionId}] Seq inconsistent: state.seq=${this.state.seq} is before last msg seq=${lastMsgSeq}. Correcting.`)
+        this.state.seq = lastMsgSeq
+        stateWasCorrected = true
+      }
+    }
+    // Persist corrections to prevent repeated issues
+    if (stateWasCorrected) {
+      this.ctx.storage.put('state', this.state)
+    }
+
     // Send SYNC response (official Croquet protocol format)
     // Must include: url, messages, time, seq, tove, reflector, timeline, flags
     //
@@ -543,6 +571,12 @@ export class Synchronizer extends DurableObject<Env> {
         `isEffectivelyFirstClient=${isEffectivelyFirstClient}, clientMustInitFresh=${clientMustInitFresh}, ` +
         `seq=${this.state.seq}, messages=${this.state.messages.length}, syncTime=${syncTime}`
     )
+
+    // Flag to request initial snapshot after first USERS event
+    // This ensures we have a snapshot with the initial view state saved early
+    if (isEffectivelyFirstClient && clientMustInitFresh) {
+      this.pendingInitialSnapshot = true
+    }
   }
 
   /**
@@ -607,6 +641,15 @@ export class Synchronizer extends DurableObject<Env> {
 
     // Persist state
     this.ctx.storage.put('state', this.state)
+
+    // Request initial snapshot after first USERS event for fresh sessions
+    // This ensures we have a snapshot with the initial view state saved early
+    if (this.pendingInitialSnapshot && activeClients.length > 0) {
+      this.pendingInitialSnapshot = false
+      const firstClient = activeClients[0]
+      console.log(`[${this.sessionId}] Requesting initial snapshot after first USERS event`)
+      firstClient.send(buildRequMessage(this.sessionId, this.state.time, this.state.seq))
+    }
   }
 
   /**
