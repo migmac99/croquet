@@ -419,8 +419,13 @@ export class Synchronizer extends DurableObject<Env> {
     // clear message buffer to prevent stale USERS events from being replayed.
     // Stale USERS events cause view count mismatches because the same viewId
     // appearing multiple times accumulates extraConnections in the client VM.
-    if (isEffectivelyFirstClient) {
-      console.log(`[${this.sessionId}] First client joining - clearing stale message buffer (had ${this.state.messages.length} messages)`)
+    //
+    // HOWEVER: Only clear messages if session is truly cold (no recent snapshot).
+    // If we have a recent snapshot (within last 5 minutes), this is likely a
+    // reconnection, not a cold start, so keep the message buffer.
+    const sessionIsCold = !snapshotTime || now() - snapshotTime > 5 * 60 * 1000
+    if (isEffectivelyFirstClient && sessionIsCold) {
+      console.log(`[${this.sessionId}] First client joining cold session - clearing stale message buffer (had ${this.state.messages.length} messages)`)
       this.state.messages = []
 
       if (clientMustInitFresh) {
@@ -448,6 +453,21 @@ export class Synchronizer extends DurableObject<Env> {
       if (this.usersTimer) {
         clearTimeout(this.usersTimer)
         this.usersTimer = null
+      }
+    } else if (isEffectivelyFirstClient && !sessionIsCold) {
+      console.log(
+        `[${this.sessionId}] First client rejoining warm session (snapshot age: ${Math.round((now() - snapshotTime) / 1000)}s) - keeping ${this.state.messages.length} buffered messages`
+      )
+      // If we have a snapshot but state was just initialized (from hibernation),
+      // restore time/seq from snapshot to continue correctly
+      if (!clientMustInitFresh && this.state.time === 0 && this.state.seq === INITIAL_SEQ) {
+        console.log(`[${this.sessionId}] Restoring state from snapshot after hibernation: time=${snapshotTime}, seq=${snapshotSeq}`)
+        this.state.time = snapshotTime
+        this.state.seq = snapshotSeq
+        this.state.scaledStart = now() - snapshotTime / this.state.scale
+        this.state.snapshotTime = snapshotTime
+        this.state.snapshotSeq = snapshotSeq
+        this.state.snapshotUrl = `snapshot:${snapshotSeq}`
       }
     } else if (clientMustInitFresh) {
       // Late joiner without snapshot - check if messages can be replayed
