@@ -5,7 +5,7 @@ import { now, generateTimeline, after, advanceTime, getRawTime, getScaledTime } 
 import { TALLY_INTERVAL, MAX_TALLY_AGE, MAX_COMPLETED_TALLIES } from './tally'
 import { USERS_INTERVAL, INITIAL_SEQ } from './users'
 import { type ClientLocation, buildClientLocations } from './session-tracker'
-import { type IncomingMessage, type WSAttachment, buildRequMessage } from './protocol'
+import { type IncomingMessage, type WSAttachment } from './protocol'
 import { arrayBufferToBase64, base64ToArrayBuffer, detectColoFromTrace } from './utils'
 
 // ============================================================================
@@ -55,7 +55,6 @@ export class Synchronizer extends DurableObject<Env> {
   private storage: SnapshotStorage | null = null
   private lastSnapshotPrune = 0
   private pendingSnapshot: { clientId: string; time: number } | null = null
-  private pendingInitialSnapshot = false // Request snapshot after first USERS event for fresh sessions
   private sessionName: string | null = null // Logical session name (from URL path)
   private usersTimer: ReturnType<typeof setTimeout> | null = null // Timer for batched users events
   private trackedInKV = false // Track if we've registered session in SESSIONS KV
@@ -92,6 +91,15 @@ export class Synchronizer extends DurableObject<Env> {
       if (stored) {
         this.state = stored
 
+        // Log what we loaded
+        const msgCount = this.state.messages?.length || 0
+        const firstSeq = msgCount > 0 ? (this.state.messages[0] as number[])?.[1] : 'none'
+        const lastSeq = msgCount > 0 ? (this.state.messages[msgCount - 1] as number[])?.[1] : 'none'
+        console.log(
+          `[${this.sessionId}] Hydrated from storage: time=${this.state.time}, seq=${this.state.seq}, ` +
+            `messages=${msgCount} (first seq: ${firstSeq}, last seq: ${lastSeq})`
+        )
+
         // Migrate sessions created before these fields were added
         if (!this.state.messages) this.state.messages = []
         if (!this.state.scale) this.state.scale = 1.0
@@ -103,6 +111,8 @@ export class Synchronizer extends DurableObject<Env> {
         if (!this.state.flags || typeof this.state.flags !== 'object') this.state.flags = {}
 
         if (this.env.SNAPSHOTS) this.storage = new SnapshotStorage(this.env.SNAPSHOTS, this.sessionId)
+      } else {
+        console.log(`[${this.sessionId}] No state found in storage (fresh DO)`)
       }
     } catch (err) {
       console.error(`[${this.sessionId}] Hydrate error:`, err)
@@ -258,6 +268,17 @@ export class Synchronizer extends DurableObject<Env> {
     // Check if session is now empty
     const remaining = this.ctx.getWebSockets().length
     if (remaining === 0) {
+      // Request snapshot before last client disconnects
+      // This ensures we have a recent snapshot + small message buffer for rejoins
+      if (this.state && this.state.messages.length > 0) {
+        console.log(`[${this.sessionId}] Last client disconnecting - requesting snapshot (${this.state.messages.length} messages buffered)`)
+        this.sendREQU()
+      }
+
+      // Save message buffer to R2 for durability (in case DO is evicted)
+      // This ensures zero data loss even if DO storage is cleared
+      await this.saveMessageBufferToR2()
+
       // Untrack session from KV (removes from manager UI)
       // Fire-and-forget - don't block the close handler
       this.untrackSession()
@@ -394,6 +415,26 @@ export class Synchronizer extends DurableObject<Env> {
       }
     }
 
+    // If no snapshot but we have state in storage, try loading message buffer from R2
+    // This handles the case where DO was evicted but message buffer was saved
+    if (!snapshot && this.state) {
+      const messageBuffer = await this.loadMessageBufferFromR2()
+      if (messageBuffer) {
+        // Restore state from message buffer
+        this.state.time = messageBuffer.time
+        this.state.seq = messageBuffer.seq
+        this.state.messages = messageBuffer.messages
+        this.state.timeline = messageBuffer.timeline
+        this.state.scaledStart = now() - messageBuffer.time / this.state.scale
+        if (messageBuffer.snapshotTime) this.state.snapshotTime = messageBuffer.snapshotTime
+        if (messageBuffer.snapshotSeq) this.state.snapshotSeq = messageBuffer.snapshotSeq
+
+        console.log(
+          `[${this.sessionId}] Restored from R2 message buffer: time=${messageBuffer.time}, seq=${messageBuffer.seq}, messages=${messageBuffer.messages.length}`
+        )
+      }
+    }
+
     // Build snapshot URL if we have one (empty string if none, matching reflector behavior)
     const snapshotUrl = snapshot ? `data:application/octet-stream;base64,${arrayBufferToBase64(snapshot)}` : ''
 
@@ -415,83 +456,37 @@ export class Synchronizer extends DurableObject<Env> {
     // With a snapshot, client loads snapshot and replays messages
     const clientMustInitFresh = !snapshotUrl
 
-    // CRITICAL: When session effectively restarts (first client after all left),
-    // clear message buffer to prevent stale USERS events from being replayed.
-    // Stale USERS events cause view count mismatches because the same viewId
-    // appearing multiple times accumulates extraConnections in the client VM.
-    //
-    // HOWEVER: Only clear messages if session is truly cold (no recent snapshot).
-    // If we have a recent snapshot (within last 5 minutes), this is likely a
-    // reconnection, not a cold start, so keep the message buffer.
-    const sessionIsCold = !snapshotTime || now() - snapshotTime > 5 * 60 * 1000
-    if (isEffectivelyFirstClient && sessionIsCold) {
-      console.log(`[${this.sessionId}] First client joining cold session - clearing stale message buffer (had ${this.state.messages.length} messages)`)
-      this.state.messages = []
+    // When first client joins after hibernation, restore state from snapshot if needed
+    if (isEffectivelyFirstClient && !clientMustInitFresh && this.state.time === 0 && this.state.seq === INITIAL_SEQ) {
+      // CRITICAL: Restore state from snapshot to continue correctly after hibernation
+      // Without this, time/seq would stay at 0/INITIAL_SEQ and new TICKs
+      // would have wrong timestamps, causing "Expected message #X got #Y" errors
+      console.log(`[${this.sessionId}] Restoring state from snapshot after hibernation: time=${snapshotTime}, seq=${snapshotSeq}`)
+      this.state.time = snapshotTime
+      this.state.seq = snapshotSeq
+      this.state.scaledStart = now() - snapshotTime / this.state.scale
+      this.state.snapshotTime = snapshotTime
+      this.state.snapshotSeq = snapshotSeq
+      this.state.snapshotUrl = `snapshot:${snapshotSeq}`
+    }
 
-      if (clientMustInitFresh) {
-        // No snapshot - start fresh from INITIAL_SEQ
-        this.state.seq = INITIAL_SEQ
-      } else {
-        // CRITICAL: Restore state from snapshot to continue correctly
-        // Without this, time/seq would stay at 0/INITIAL_SEQ and new TICKs
-        // would have wrong timestamps, causing "Expected message #X got #Y" errors
-        console.log(`[${this.sessionId}] Restoring state from snapshot: time=${snapshotTime}, seq=${snapshotSeq}`)
-        this.state.time = snapshotTime
-        this.state.seq = snapshotSeq
-        // Recalculate scaledStart so future advanceTime() continues from snapshotTime
-        // Formula: time = (now - scaledStart) * scale => scaledStart = now - time/scale
-        this.state.scaledStart = now() - snapshotTime / this.state.scale
-        // Also restore snapshot metadata for manager UI display
-        this.state.snapshotTime = snapshotTime
-        this.state.snapshotSeq = snapshotSeq
-        this.state.snapshotUrl = `snapshot:${snapshotSeq}`
-      }
-
-      // Clear any pending users batch (stale from previous session)
-      this.state.usersJoined = []
-      this.state.usersLeft = []
-      if (this.usersTimer) {
-        clearTimeout(this.usersTimer)
-        this.usersTimer = null
-      }
-    } else if (isEffectivelyFirstClient && !sessionIsCold) {
-      console.log(
-        `[${this.sessionId}] First client rejoining warm session (snapshot age: ${Math.round((now() - snapshotTime) / 1000)}s) - keeping ${this.state.messages.length} buffered messages`
-      )
-      // If we have a snapshot but state was just initialized (from hibernation),
-      // restore time/seq from snapshot to continue correctly
-      if (!clientMustInitFresh && this.state.time === 0 && this.state.seq === INITIAL_SEQ) {
-        console.log(`[${this.sessionId}] Restoring state from snapshot after hibernation: time=${snapshotTime}, seq=${snapshotSeq}`)
-        this.state.time = snapshotTime
-        this.state.seq = snapshotSeq
-        this.state.scaledStart = now() - snapshotTime / this.state.scale
-        this.state.snapshotTime = snapshotTime
-        this.state.snapshotSeq = snapshotSeq
-        this.state.snapshotUrl = `snapshot:${snapshotSeq}`
-      }
+    // NEVER clear message buffer based on time - messages are needed for late-joiner catchup
+    // and reconnection. Snapshot purging (in handleSnap) handles cleanup naturally.
+    // Only reset seq/time if truly starting fresh (no snapshot at all)
+    if (isEffectivelyFirstClient && clientMustInitFresh && this.state.seq === INITIAL_SEQ) {
+      console.log(`[${this.sessionId}] First client - fresh start`)
+    } else if (isEffectivelyFirstClient) {
+      console.log(`[${this.sessionId}] First client rejoining - keeping ${this.state.messages.length} buffered messages`)
     } else if (clientMustInitFresh) {
-      // Late joiner without snapshot - check if messages can be replayed
-      // If messages is empty, that's fine (fresh session, no messages yet)
-      // If messages exist but start at wrong seq, reset (stale session)
+      // Late joiner without snapshot - just log for visibility
+      // Never clear messages - they may be needed for late-joiner catchup
       if (this.state.messages.length > 0) {
         const firstMsgSeq = (this.state.messages[0] as number[] | undefined)?.[1]
-        if (firstMsgSeq !== (INITIAL_SEQ + 1) >>> 0) {
-          // Messages can't be used for catchup - reset
-          console.log(`[${this.sessionId}] Resetting session - messages start at ${firstMsgSeq}, expected ${(INITIAL_SEQ + 1) >>> 0}`)
-          this.state.messages = []
-          this.state.seq = INITIAL_SEQ
-          // Generate new timeline to force all clients to reconnect fresh
-          this.state.timeline = generateTimeline()
-          // Clear any pending users batch (stale from previous session)
-          this.state.usersJoined = []
-          this.state.usersLeft = []
-          if (this.usersTimer) {
-            clearTimeout(this.usersTimer)
-            this.usersTimer = null
-          }
-        }
+        console.log(
+          `[${this.sessionId}] Late joiner without snapshot - ${this.state.messages.length} buffered messages ` +
+            `(first seq: ${firstMsgSeq}, current seq: ${this.state.seq})`
+        )
       }
-      // If messages is empty, that's fine - it's a fresh session with no messages yet
     }
 
     // syncTime is the time at the snapshot (or 0 for fresh init)
@@ -504,17 +499,15 @@ export class Synchronizer extends DurableObject<Env> {
       const firstMsgSeq = (this.state.messages[0] as number[])?.[1]
       const lastMsgSeq = (this.state.messages[this.state.messages.length - 1] as number[])?.[1]
 
-      // First message should be after snapshot seq
+      // Log warnings about inconsistencies but NEVER clear messages
       if (firstMsgSeq !== undefined && !after(snapshotSeq, firstMsgSeq)) {
         console.warn(
-          `[${this.sessionId}] Message buffer inconsistent: first msg seq=${firstMsgSeq} should be after snapshot seq=${snapshotSeq}. Clearing stale messages.`
+          `[${this.sessionId}] Message buffer note: first msg seq=${firstMsgSeq} not after snapshot seq=${snapshotSeq}. Keeping messages for catchup.`
         )
-        this.state.messages = []
-        stateWasCorrected = true
       }
-      // Current seq should match or be after last message seq
-      else if (lastMsgSeq !== undefined && after(this.state.seq, lastMsgSeq)) {
-        console.warn(`[${this.sessionId}] Seq inconsistent: state.seq=${this.state.seq} is before last msg seq=${lastMsgSeq}. Correcting.`)
+      // Current seq should match or be after last message seq - fix if needed
+      if (lastMsgSeq !== undefined && after(this.state.seq, lastMsgSeq)) {
+        console.warn(`[${this.sessionId}] Seq inconsistent: state.seq=${this.state.seq} is before last msg seq=${lastMsgSeq}. Correcting to ${lastMsgSeq}.`)
         this.state.seq = lastMsgSeq
         stateWasCorrected = true
       }
@@ -558,10 +551,14 @@ export class Synchronizer extends DurableObject<Env> {
       args: syncArgs,
     }
 
-    // Debug: log SYNC details
+    // Debug: log SYNC details with message buffer info
+    const msgCount = this.state.messages.length
+    const firstMsgSeq = msgCount > 0 ? (this.state.messages[0] as number[])?.[1] : 'none'
+    const lastMsgSeq = msgCount > 0 ? (this.state.messages[msgCount - 1] as number[])?.[1] : 'none'
     console.log(
       `[${this.sessionId}] Sending SYNC: url=${snapshotUrl ? '<snapshot>' : '<none>'}, ` +
-        `time=${syncTime}, seq=${this.state.seq}, messages=${this.state.messages.length}, timeline=${this.state.timeline.slice(0, 8)}`
+        `time=${syncTime}, seq=${this.state.seq}, messages=${msgCount} ` +
+        `(first seq: ${firstMsgSeq}, last seq: ${lastMsgSeq}), timeline=${this.state.timeline.slice(0, 8)}`
     )
 
     ws.send(JSON.stringify(syncResponse))
@@ -592,11 +589,9 @@ export class Synchronizer extends DurableObject<Env> {
         `seq=${this.state.seq}, messages=${this.state.messages.length}, syncTime=${syncTime}`
     )
 
-    // Flag to request initial snapshot after first USERS event
-    // This ensures we have a snapshot with the initial view state saved early
-    if (isEffectivelyFirstClient && clientMustInitFresh) {
-      this.pendingInitialSnapshot = true
-    }
+    // Don't request initial snapshot immediately - let Croquet's natural snapshot
+    // mechanism handle it based on CPU time. Requesting too early causes snapshots
+    // before users create any meaningful state, leading to state loss on refresh.
   }
 
   /**
@@ -607,7 +602,7 @@ export class Synchronizer extends DurableObject<Env> {
    * Original reflector: [...clients].filter(each => each.active)
    * A client in the set but not active is between JOIN and SYNC
    */
-  private sendUsersEvent(joined: (string | undefined)[], left: (string | undefined)[]): void {
+  private async sendUsersEvent(joined: (string | undefined)[], left: (string | undefined)[]): Promise<void> {
     if (!this.state) return
     if (joined.length === 0 && left.length === 0) return
 
@@ -658,18 +653,11 @@ export class Synchronizer extends DurableObject<Env> {
     // Buffer message for late-joiner catchup
     this.state.messages.push(message)
     this.state.lastMsgTime = time
+    this.state.lastActivity = now() // Track activity for warm/cold session detection
 
-    // Persist state
-    this.ctx.storage.put('state', this.state)
-
-    // Request initial snapshot after first USERS event for fresh sessions
-    // This ensures we have a snapshot with the initial view state saved early
-    if (this.pendingInitialSnapshot && activeClients.length > 0) {
-      this.pendingInitialSnapshot = false
-      const firstClient = activeClients[0]
-      console.log(`[${this.sessionId}] Requesting initial snapshot after first USERS event`)
-      firstClient.send(buildRequMessage(this.sessionId, this.state.time, this.state.seq))
-    }
+    // Persist state - await to ensure it completes before hibernation
+    await this.ctx.storage.put('state', this.state)
+    console.log(`[${this.sessionId}] USERS event persisted: seq=${this.state.seq}, buffer size=${this.state.messages.length}`)
   }
 
   /**
@@ -714,7 +702,7 @@ export class Synchronizer extends DurableObject<Env> {
   /**
    * Flush batched users events (called after USERS_INTERVAL)
    */
-  private flushUsersEvent(): void {
+  private async flushUsersEvent(): Promise<void> {
     this.usersTimer = null
     if (!this.state) return
 
@@ -726,7 +714,7 @@ export class Synchronizer extends DurableObject<Env> {
     this.state.usersLeft = []
 
     // Send the batched users event
-    if (joined.length > 0 || left.length > 0) this.sendUsersEvent(joined, left)
+    if (joined.length > 0 || left.length > 0) await this.sendUsersEvent(joined, left)
   }
 
   /**
@@ -749,7 +737,7 @@ export class Synchronizer extends DurableObject<Env> {
    * Handle SEND - broadcast event to all clients
    * Matches original reflector: advanceTime, timestamp message, buffer for SYNC catchup
    */
-  private handleSend(_attachment: WSAttachment, args: unknown[], tags?: { debounce?: number; msgID?: string }): void {
+  private async handleSend(_attachment: WSAttachment, args: unknown[], tags?: { debounce?: number; msgID?: string }): Promise<void> {
     if (!this.state) return
 
     // Debounce support (matches original reflector SEND_TAGGED)
@@ -841,8 +829,10 @@ export class Synchronizer extends DurableObject<Env> {
     // Using the latency extracted BEFORE rawtime modification
     if (typeof latency === 'number' && latency > 0 && latency < 60000) recordLatency(this.metrics, latency)
 
-    // Persist state (debounced via write coalescing)
-    this.ctx.storage.put('state', this.state)
+    // CRITICAL: Await storage write to ensure message persists before hibernation
+    // This prevents message loss if DO hibernates immediately after sending
+    await this.ctx.storage.put('state', this.state)
+    console.log(`[${this.sessionId}] Message persisted: seq=${this.state.seq}, buffer size=${this.state.messages.length}`)
   }
 
   /**
@@ -1236,17 +1226,12 @@ export class Synchronizer extends DurableObject<Env> {
   async alarm(): Promise<void> {
     const sockets = this.ctx.getWebSockets()
     if (sockets.length === 0) {
-      // No clients - session timed out, clean up storage to free resources
-      // Snapshots are kept in R2 for potential recovery
-      console.log(`[${this.sessionId}] Session timed out, cleaning up storage`)
-      await this.markSessionInactive() // Mark as inactive (TTL will eventually expire)
-      // Preserve sessionName so future info queries can find R2 snapshots
-      const preserveSessionName = this.sessionName
-      await this.ctx.storage.deleteAll()
-      if (preserveSessionName) {
-        await this.ctx.storage.put('sessionName', preserveSessionName)
-      }
-      this.state = null
+      // No clients - session timed out
+      // IMPORTANT: Do NOT delete state - preserve it for reconnection!
+      // The message buffer contains messages since last snapshot, needed for late-joiner catchup.
+      // State will naturally be cleaned up when DO is evicted from memory after extended inactivity.
+      console.log(`[${this.sessionId}] Session timed out - preserving state for reconnection (${this.state?.messages.length || 0} messages buffered)`)
+      await this.markSessionInactive() // Mark as inactive (TTL will eventually expire in KV)
       return
     }
 
@@ -1655,6 +1640,71 @@ export class Synchronizer extends DurableObject<Env> {
       }
     } catch (err) {
       return { sessionId: this.sessionId, snapshots: [], error: String(err) }
+    }
+  }
+
+  /**
+   * Save message buffer to R2 for durability
+   * Called when last client disconnects to ensure zero data loss even if DO is evicted
+   */
+  private async saveMessageBufferToR2(): Promise<void> {
+    if (!this.env.SNAPSHOTS || !this.state) return
+    if (this.state.messages.length === 0) {
+      console.log(`[${this.sessionId}] No messages to backup to R2`)
+      return
+    }
+
+    try {
+      const key = `${this.sessionId}/message-buffer.json`
+      const data = {
+        time: this.state.time,
+        seq: this.state.seq,
+        snapshotTime: this.state.snapshotTime,
+        snapshotSeq: this.state.snapshotSeq,
+        messages: this.state.messages,
+        timeline: this.state.timeline,
+        savedAt: Date.now(),
+      }
+
+      await this.env.SNAPSHOTS.put(key, JSON.stringify(data), {
+        customMetadata: {
+          time: String(this.state.time),
+          seq: String(this.state.seq),
+          messageCount: String(this.state.messages.length),
+        },
+      })
+
+      console.log(`[${this.sessionId}] Saved ${this.state.messages.length} messages to R2 backup (seq: ${this.state.seq})`)
+    } catch (err) {
+      console.error(`[${this.sessionId}] Failed to save message buffer to R2:`, err)
+    }
+  }
+
+  /**
+   * Load message buffer from R2 if available
+   * Returns message buffer or null if not found
+   */
+  private async loadMessageBufferFromR2(): Promise<{
+    time: number
+    seq: number
+    snapshotTime?: number
+    snapshotSeq?: number
+    messages: unknown[][]
+    timeline: string
+  } | null> {
+    if (!this.env.SNAPSHOTS) return null
+
+    try {
+      const key = `${this.sessionId}/message-buffer.json`
+      const obj = await this.env.SNAPSHOTS.get(key)
+      if (!obj) return null
+
+      const data = JSON.parse(await obj.text())
+      console.log(`[${this.sessionId}] Loaded message buffer from R2: ${data.messages.length} messages (seq: ${data.seq})`)
+      return data
+    } catch (err) {
+      console.log(`[${this.sessionId}] No message buffer found in R2 (or error loading):`, err)
+      return null
     }
   }
 }
