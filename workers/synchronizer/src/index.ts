@@ -68,6 +68,13 @@ export default {
       }
     }
 
+    // Diagnostic script endpoint - load via: fetch('https://synq.alma.dev/diag.js').then(r=>r.text()).then(eval)
+    if (url.pathname === '/diag.js') {
+      return new Response(DIAG_SCRIPT, {
+        headers: { 'Content-Type': 'application/javascript', ...corsHeaders() },
+      })
+    }
+
     // File server endpoints - serves as snapshot storage for the Croquet client
     // Client configures ?files=https://synq.alma.dev/files to upload/download here
     if (url.pathname.startsWith('/files/')) {
@@ -320,3 +327,70 @@ async function listR2Sessions(env: Env, url: URL): Promise<Response> {
     return jsonResponse({ sessions: [], error: 'Failed to list R2 sessions' })
   }
 }
+
+/**
+ * Browser diagnostic script for debugging Croquet synchronizer issues.
+ * Load via browser console: fetch('https://synq.alma.dev/diag.js').then(r=>r.text()).then(eval)
+ * Or: let s=document.createElement('script');s.src='https://synq.alma.dev/diag.js';document.head.append(s)
+ */
+const DIAG_SCRIPT = `(function(){
+  var log=function(){var a=[].slice.call(arguments);console.log('%c[DIAG]','color:cyan;font-weight:bold',a.join(' '))};
+  var warn=function(){var a=[].slice.call(arguments);console.warn('%c[DIAG]','color:orange;font-weight:bold',a.join(' '))};
+  var S={startTime:Date.now(),tickCount:0,lastTickTime:0,lastTickWall:0,maxGap:0,gaps:[],wsConnects:[],wsCloses:[],hiddenAt:null,hiddenPeriods:[],syncs:[]};
+  var origParse=JSON.parse;
+  JSON.parse=function(text){
+    var r=origParse.apply(this,arguments);
+    if(r&&typeof r==='object'&&r.action)onMsg(r);
+    return r;
+  };
+  function onMsg(msg){
+    var now=Date.now();
+    if(msg.action==='TICK'){
+      var t=typeof msg.args==='number'?msg.args:msg.args&&msg.args.time;
+      S.tickCount++;
+      if(S.lastTickWall){
+        var gap=now-S.lastTickWall;
+        if(gap>S.maxGap)S.maxGap=gap;
+        if(gap>500){S.gaps.push({wall:now,gap:gap,tickTime:t});if(gap>2000)warn('TICK gap '+gap+'ms  tickTime='+t);}
+      }
+      S.lastTickTime=t;S.lastTickWall=now;
+    }else if(msg.action==='SYNC'){
+      var a=msg.args||{};
+      log('SYNC time='+a.time+' msgs='+(a.messages?a.messages.length:0)+' snap='+(a.url?'yes':'none'));
+      S.syncs.push({wall:now,time:a.time,msgs:a.messages?a.messages.length:0});
+    }
+  }
+  var OrigWS=window.WebSocket;
+  window.WebSocket=function(){
+    var ws=new (Function.prototype.bind.apply(OrigWS,[null].concat([].slice.call(arguments))));
+    var url=String(arguments[0]);
+    if(/synq|croquet|multisynq/i.test(url)){
+      log('WS open -> '+url.slice(0,100));
+      S.wsConnects.push({wall:Date.now()});
+      ws.addEventListener('close',function(e){warn('WS close code='+e.code+' reason='+e.reason+' clean='+e.wasClean);S.wsCloses.push({wall:Date.now(),code:e.code,reason:e.reason,clean:e.wasClean});});
+      ws.addEventListener('error',function(){warn('WS error');});
+    }
+    return ws;
+  };
+  window.WebSocket.prototype=OrigWS.prototype;
+  Object.keys(OrigWS).forEach(function(k){try{window.WebSocket[k]=OrigWS[k];}catch(e){}});
+  document.addEventListener('visibilitychange',function(){
+    var now=Date.now();
+    if(document.hidden){S.hiddenAt=now;warn('Tab HIDDEN');}
+    else{var dur=S.hiddenAt?now-S.hiddenAt:0;warn('Tab VISIBLE (was hidden '+dur+'ms)');if(S.hiddenAt)S.hiddenPeriods.push({from:S.hiddenAt,to:now,duration:dur});S.hiddenAt=null;}
+  });
+  var iv=setInterval(function(){
+    var sec=((Date.now()-S.startTime)/1000)|0;
+    var recent=S.gaps.filter(function(g){return Date.now()-g.wall<30000;});
+    log('['+sec+'s] ticks='+S.tickCount+' maxGap='+S.maxGap+'ms gaps>500ms='+S.gaps.length+' gaps>2s='+S.gaps.filter(function(g){return g.gap>2000;}).length+' wsClose='+S.wsCloses.length+' syncs='+S.syncs.length+' hidden='+S.hiddenPeriods.length+'x'+(recent.length?' recentGaps=['+recent.map(function(g){return g.gap+'ms';}).join(',')+']':''));
+  },10000);
+  window.__diag={state:S,
+    stats:function(){
+      console.table([['Ticks received',S.tickCount],['Max tick gap (ms)',S.maxGap],['Gaps > 500ms',S.gaps.length],['Gaps > 2s',S.gaps.filter(function(g){return g.gap>2000;}).length],['WS connects',S.wsConnects.length],['WS closes',S.wsCloses.length],['SYNCs received',S.syncs.length],['Tab hidden periods',S.hiddenPeriods.length],['Running (s)',((Date.now()-S.startTime)/1000|0)]].map(function(r){return{metric:r[0],value:r[1]};}));
+      if(S.wsCloses.length){console.log('WS close events:');console.table(S.wsCloses.map(function(c){return{at:new Date(c.wall).toISOString().slice(11,23),code:c.code,reason:c.reason,clean:c.clean};}));}
+      if(S.gaps.filter(function(g){return g.gap>2000;}).length){console.log('Gaps > 2s:');console.table(S.gaps.filter(function(g){return g.gap>2000;}).map(function(g){return{at:new Date(g.wall).toISOString().slice(11,23),gap:g.gap+'ms',tickTime:g.tickTime};}));}
+    },
+    stop:function(){JSON.parse=origParse;window.WebSocket=OrigWS;clearInterval(iv);log('Stopped.');}
+  };
+  log('Diagnostics running. __diag.stats() for summary, __diag.stop() to cleanup.');
+})();`

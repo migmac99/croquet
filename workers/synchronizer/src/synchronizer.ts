@@ -12,7 +12,11 @@ import { arrayBufferToBase64, base64ToArrayBuffer, detectColoFromTrace } from '.
 // Session Constants
 // ============================================================================
 
-const DEFAULT_TICK_MS = 200 // 5 ticks per second (matches original reflector)
+const DEFAULT_TICK_MS = 50 // 20 ticks per second (matches original reflector default tps=20)
+// Safety alarm interval: DO alarms are NOT used for ticking (too slow with hibernation
+// wake-up overhead). Instead, setInterval handles ticking in-memory. The safety alarm
+// runs every 30s to restart the tick loop if the DO was forcefully evicted and reconstituted.
+const SAFETY_ALARM_MS = 30000
 const SNAPSHOT_PRUNE_INTERVAL_MS = 300000 // 5 minutes
 const MAX_MESSAGES = 100000 // Max messages to retain since last snapshot
 const REQU_SNAPSHOT = 60000 // Request snapshot if this many messages retained
@@ -64,6 +68,8 @@ export class Synchronizer extends DurableObject<Env> {
   private doColo: string | null = null // DO's actual location (detected via cdn-cgi/trace)
   private doLocationDetectionStarted = false // Prevent multiple detection attempts
   private metrics: SessionMetrics = createEmptyMetrics() // Prometheus-compatible metrics (matches original reflector)
+  private tickInterval: ReturnType<typeof setInterval> | null = null // In-memory tick loop (replaces alarm-based ticking)
+  private ticking = false // Guard against overlapping tick executions
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
@@ -71,6 +77,10 @@ export class Synchronizer extends DurableObject<Env> {
     // Restore state on wake from hibernation
     this.ctx.blockConcurrencyWhile(async () => {
       await this.hydrate()
+      // If clients are connected (DO was evicted and reconstituted), restart tick loop
+      if (this.state && this.ctx.getWebSockets().length > 0) {
+        this.startTickLoop()
+      }
     })
   }
 
@@ -249,8 +259,8 @@ export class Synchronizer extends DurableObject<Env> {
 
     console.log(`[${this.sessionId}] Client connected: ${clientId} (${currentClients + 1} total)`)
 
-    // Ensure ticking is scheduled
-    this.scheduleTick()
+    // Start tick loop (will be a no-op if already running or state not yet initialized)
+    this.startTickLoop()
 
     // Detect DO location (fire-and-forget, only runs once)
     this.detectDoLocation()
@@ -270,6 +280,13 @@ export class Synchronizer extends DurableObject<Env> {
 
     attachment.lastSeen = Date.now()
     ws.serializeAttachment(attachment)
+
+    // Safety net: ensure the tick loop is running whenever we receive a message.
+    // The interval can be lost if the DO was evicted and reconstituted.
+    if (!this.tickInterval && this.ctx.getWebSockets().length > 0 && this.state) {
+      console.warn(`[${this.sessionId}] Tick loop not running — restarting from webSocketMessage`)
+      this.startTickLoop()
+    }
 
     try {
       const data = typeof message === 'string' ? message : new TextDecoder().decode(message)
@@ -297,6 +314,9 @@ export class Synchronizer extends DurableObject<Env> {
     // Check if session is now empty
     const remaining = this.ctx.getWebSockets().length
     if (remaining === 0) {
+      // Stop the tick loop — no one to send ticks to
+      this.stopTickLoop()
+
       // Note: Can't request snapshot here (last client is already disconnecting, REQU would go to nobody).
       // Snapshots are taken during normal operation via the client's CPU-time-based mechanism.
       if (this.state && this.state.messages.length > 0) {
@@ -341,7 +361,7 @@ export class Synchronizer extends DurableObject<Env> {
         await this.handleJoin(ws, attachment, args as Record<string, unknown>)
         break
       case 'SEND':
-        this.handleSend(attachment, args as unknown[], msg.tags)
+        await this.handleSend(attachment, args as unknown[], msg.tags)
         break
       case 'PING':
         this.handlePing(ws, args)
@@ -612,8 +632,8 @@ export class Synchronizer extends DurableObject<Env> {
     // The original reflector batches joins/leaves and sends them together
     if (attachment.userId) this.queueUserJoin(attachment.userId)
 
-    // Ensure ticking
-    this.scheduleTick()
+    // Ensure tick loop is running
+    this.startTickLoop()
 
     // Track session in KV for manager UI visibility
     // This is fire-and-forget - don't block the JOIN response
@@ -909,10 +929,11 @@ export class Synchronizer extends DurableObject<Env> {
       this.state.scaledStart = now() - currentScaledTime / scaleToApply
     }
 
-    // Handle tick rate change
+    // Handle tick rate change — restart interval with new rate
     if (tick && tick > 0) {
       this.state.tick = tick
-      this.scheduleTick()
+      this.stopTickLoop()
+      this.startTickLoop()
     }
 
     // Persist updated config
@@ -1330,38 +1351,63 @@ export class Synchronizer extends DurableObject<Env> {
   }
 
   /**
-   * Schedule the next tick via alarm
+   * Start the in-memory tick loop using setInterval.
+   *
+   * Unlike alarm-based ticking (which requires full DO wake-up from hibernation
+   * per tick — constructor + hydrate + 4 storage reads), setInterval runs in-memory
+   * with sub-ms overhead, matching the original reflector's architecture.
+   * The DO stays in memory while the interval is active, which is correct:
+   * real-time tick delivery requires the DO to be alive.
+   *
+   * A safety alarm (every 30s) restarts the tick loop if the DO is forcefully evicted.
    */
-  private scheduleTick(): void {
-    if (this.ctx.getWebSockets().length === 0) return
-    const tickMs = this.state?.tick || DEFAULT_TICK_MS
-    this.ctx.storage.setAlarm(Date.now() + tickMs)
+  private startTickLoop(): void {
+    if (this.tickInterval) return // Already running
+    if (!this.state) return // No session state yet
+
+    const tickMs = this.state.tick || DEFAULT_TICK_MS
+    this.tickInterval = setInterval(() => {
+      this.performTick().catch((err) => {
+        console.error(`[${this.sessionId}] Tick error:`, err)
+      })
+    }, tickMs)
+
+    // Set safety alarm to restart tick loop if DO gets evicted and reconstituted
+    this.ctx.storage.setAlarm(Date.now() + SAFETY_ALARM_MS)
+
+    console.log(`[${this.sessionId}] Tick loop started: ${tickMs}ms interval`)
+  }
+
+  /** Stop the in-memory tick loop */
+  private stopTickLoop(): void {
+    if (this.tickInterval) {
+      clearInterval(this.tickInterval)
+      this.tickInterval = null
+      console.log(`[${this.sessionId}] Tick loop stopped`)
+    }
   }
 
   /**
-   * Handle alarm - used for ticking and cleanup
-   * Matches original reflector TICK behavior
+   * Perform a single tick: advance time, broadcast TICK, check clients, persist state.
+   * Called by setInterval at the session's tick rate.
    *
-   * CRITICAL: scheduleTick() must ALWAYS be called at the end, even on error.
-   * Unlike the original reflector's setInterval (which fires unconditionally),
-   * the alarm-based approach requires explicit rescheduling. If scheduleTick()
-   * is missed, ticking stops permanently until a new client connects.
+   * This contains the tick logic previously in alarm(), but without the hibernation
+   * wake-up overhead (no constructor, no hydrate, no storage reads per tick).
    */
-  async alarm(): Promise<void> {
-    const sockets = this.ctx.getWebSockets()
-    if (sockets.length === 0) {
-      // No clients - session timed out
-      // IMPORTANT: Do NOT delete state - preserve it for reconnection!
-      // The message buffer contains messages since last snapshot, needed for late-joiner catchup.
-      // State will naturally be cleaned up when DO is evicted from memory after extended inactivity.
-      console.log(`[${this.sessionId}] Session timed out - preserving state for reconnection (${this.state?.messages.length || 0} messages buffered)`)
-      await this.markSessionInactive() // Mark as inactive (TTL will eventually expire in KV)
-      return
-    }
+  private async performTick(): Promise<void> {
+    if (this.ticking) return // Guard against overlapping async ticks
+    this.ticking = true
 
     try {
+      const sockets = this.ctx.getWebSockets()
+      if (sockets.length === 0) {
+        this.stopTickLoop()
+        return
+      }
+
+      const currentTime = Date.now()
+
       // Check for unresponsive clients (matches original reflector)
-      const currentTime = now()
       for (const ws of sockets) {
         try {
           const attachment = ws.deserializeAttachment() as WSAttachment | null
@@ -1369,11 +1415,9 @@ export class Synchronizer extends DurableObject<Env> {
 
           const inactivity = currentTime - attachment.lastSeen
           if (inactivity > DISCONNECT_THRESHOLD_MS) {
-            // Client unresponsive for too long - disconnect
             console.log(`[${this.sessionId}] Disconnecting unresponsive client ${attachment.clientId} (inactive ${inactivity}ms)`)
             ws.close(CLOSE_REASONS.UNRESPONSIVE[0], CLOSE_REASONS.UNRESPONSIVE[1])
           } else if (inactivity > PING_THRESHOLD_MS) {
-            // Client hasn't been heard from in a while - send server-initiated PING
             const pingMsg = { id: this.sessionId, action: 'PING', args: currentTime }
             ws.send(JSON.stringify(pingMsg))
           }
@@ -1387,24 +1431,18 @@ export class Synchronizer extends DurableObject<Env> {
 
       // Tick: advance time and broadcast (matches original reflector TICK function)
       if (this.state) {
-        // Check if anyone is listening (active, connected) - matches original reflector
         const sendingTicksTo = (ws: WebSocket): boolean => {
           const att = ws.deserializeAttachment() as WSAttachment
           return att?.active === true && ws.readyState === WebSocket.OPEN
         }
         const anyoneListening = sockets.some(sendingTicksTo)
 
-        // Only advance time and send ticks if someone is listening,
-        // but ALWAYS continue to scheduleTick() below (unlike the original reflector's
-        // setInterval, alarm-based ticking stops if we don't reschedule).
         if (anyoneListening) {
-          // Capture the time loaded from storage (before advanceTime modifies it)
           const storedTime = this.state.time
           const time = advanceTime(this.state, 'TICK')
           this.state.lastTick = time
 
           // Check rawtime flag - if set, send raw monotonic time instead of scaled time
-          // (matches original reflector behavior)
           const tickTime = this.state.flags?.rawtime ? currentTime - this.state.rawStart : time
           const tickMsg = JSON.stringify({ id: this.sessionId, action: 'TICK', args: tickTime })
 
@@ -1421,10 +1459,7 @@ export class Synchronizer extends DurableObject<Env> {
           this.metrics.ticksTotal++
 
           // Persist state periodically (~every 5 seconds)
-          // With DO hibernation, in-memory state is lost between alarm wake-ups.
-          // hydrate() reloads from storage each time, so we must persist the updated
-          // time regularly. Compare against the time loaded from storage to know
-          // how long since last persist.
+          // In-memory state is authoritative; storage is for recovery after eviction
           if (time - storedTime > 5000) {
             await this.ctx.storage.put('state', this.state)
           }
@@ -1432,22 +1467,47 @@ export class Synchronizer extends DurableObject<Env> {
       }
 
       // Update session tracking periodically (keeps session visible in manager UI)
-      // Session KV records use TTL, so we need periodic updates
       if (this.trackedInKV) this.updateSessionTracking(sockets.length)
 
-      // Prune old snapshots periodically (reuse currentTime from above)
-      const currentTimeForPrune = now()
-      if (this.storage && currentTimeForPrune - this.lastSnapshotPrune > SNAPSHOT_PRUNE_INTERVAL_MS) {
+      // Prune old snapshots periodically
+      if (this.storage && currentTime - this.lastSnapshotPrune > SNAPSHOT_PRUNE_INTERVAL_MS) {
         this.storage.prune(5).catch((err) => console.error('Snapshot prune failed:', err))
-        this.lastSnapshotPrune = currentTimeForPrune
+        this.lastSnapshotPrune = currentTime
       }
-    } catch (err) {
-      console.error(`[${this.sessionId}] Alarm handler error:`, err)
+    } finally {
+      this.ticking = false
+    }
+  }
+
+  /**
+   * Handle alarm - safety net and session timeout ONLY.
+   *
+   * Ticking is handled by setInterval (in startTickLoop/performTick), NOT alarms.
+   * CF DO alarms are unreliable at sub-second intervals with hibernation — each wake-up
+   * requires constructor + blockConcurrencyWhile(hydrate) + 4 storage reads, and the
+   * platform throttles delivery, causing 15-20s gaps.
+   *
+   * This alarm handler serves two purposes:
+   * 1. Session timeout: when all clients disconnect, clean up after SESSION_TIMEOUT_MS
+   * 2. Safety net: if the DO was forcefully evicted and reconstituted, restart the tick loop
+   */
+  async alarm(): Promise<void> {
+    const sockets = this.ctx.getWebSockets()
+    if (sockets.length === 0) {
+      // No clients - session timed out
+      console.log(`[${this.sessionId}] Session timed out - preserving state for reconnection (${this.state?.messages.length || 0} messages buffered)`)
+      await this.markSessionInactive()
+      return
     }
 
-    // ALWAYS reschedule - the tick loop must never die while clients are connected.
-    // This is outside the try/catch to ensure it runs even on error.
-    this.scheduleTick()
+    // Safety net: restart tick loop if DO was evicted and reconstituted
+    if (!this.tickInterval && this.state) {
+      console.warn(`[${this.sessionId}] Tick loop not running — restarting from alarm safety net`)
+      this.startTickLoop()
+    }
+
+    // Reschedule safety alarm
+    await this.ctx.storage.setAlarm(Date.now() + SAFETY_ALARM_MS)
   }
 
   /**
