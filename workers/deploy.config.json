@@ -36,6 +36,9 @@
   "manager": {
     "name": "synqmanager",
     "domain": "synqmanager.alma.dev",
+    "r2": {
+      "bucketName": "synq-snapshots"
+    },
     "kv": {
       "sessions": {
         "namespace": "synq-sessions"

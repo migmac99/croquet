@@ -144,3 +144,11 @@ fetch('https://synq.alma.dev/diag.js').then(r=>r.text()).then(eval)
 __diag.stats()  // View tick timing, WS events, tab visibility
 __diag.stop()   // Stop monitoring
 ```
+
+### Force Snapshot
+
+Trigger a snapshot manually from the browser console:
+
+```javascript
+MULTISYNQVM.forceSnapshot()
+```

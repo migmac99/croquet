@@ -333,6 +333,15 @@ generate_mgr_config() {
     local account_id=$(config '.accountId')
     local name=$(config '.manager.name')
     local domain=$(config '.manager.domain')
+    local bucket=$(config '.manager.r2.bucketName // empty')
+
+    # R2 bindings (only if bucket configured)
+    local r2_dev="" r2_prod="" r2_staging=""
+    if [ -n "$bucket" ]; then
+        r2_dev=$'\n[[r2_buckets]]\nbinding = "SNAPSHOTS"\nbucket_name = "'"${bucket}-dev"'"'
+        r2_prod=$'\n[[env.production.r2_buckets]]\nbinding = "SNAPSHOTS"\nbucket_name = "'"${bucket}"'"'
+        r2_staging=$'\n[[env.staging.r2_buckets]]\nbinding = "SNAPSHOTS"\nbucket_name = "'"${bucket}-staging"'"'
+    fi
 
     # Get vars as JSON
     local vars=$(config '.manager.vars')
@@ -372,6 +381,7 @@ id = "$synchronizers_kv_id"
 [[kv_namespaces]]
 binding = "SETTINGS"
 id = "$settings_kv_id"
+$r2_dev
 
 [vars]
 SYNCHRONIZER_URL = "ws://localhost:8787"
@@ -409,6 +419,7 @@ id = "$synchronizers_kv_id"
 [[env.production.kv_namespaces]]
 binding = "SETTINGS"
 id = "$settings_kv_id"
+$r2_prod
 
 [env.production.vars]
 $vars_toml
@@ -445,6 +456,7 @@ id = "$synchronizers_kv_id"
 [[env.staging.kv_namespaces]]
 binding = "SETTINGS"
 id = "$settings_kv_id"
+$r2_staging
 
 [env.staging.vars]
 $vars_toml

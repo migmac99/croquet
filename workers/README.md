@@ -141,13 +141,13 @@ workers/
 
 ### Synchronizer (synq.alma.dev)
 
-| Endpoint                          | Protocol  | Description                 |
-| --------------------------------- | --------- | --------------------------- |
-| `wss://synq.alma.dev/{sessionId}` | WebSocket | Session connection          |
-| `GET /health`                     | HTTP      | Health check                |
-| `PUT /files/*`                    | HTTP      | Upload snapshot to R2       |
-| `GET /files/*`                    | HTTP      | Download snapshot from R2   |
-| `GET /diag.js`                    | HTTP      | Browser diagnostic script   |
+| Endpoint                          | Protocol  | Description               |
+| --------------------------------- | --------- | ------------------------- |
+| `wss://synq.alma.dev/{sessionId}` | WebSocket | Session connection        |
+| `GET /health`                     | HTTP      | Health check              |
+| `PUT /files/*`                    | HTTP      | Upload snapshot to R2     |
+| `GET /files/*`                    | HTTP      | Download snapshot from R2 |
+| `GET /diag.js`                    | HTTP      | Browser diagnostic script |
 
 ### Registry (synqreg.alma.dev)
 
@@ -203,13 +203,18 @@ A browser diagnostic script is served at `/diag.js`. It intercepts WebSocket mes
 
 ```javascript
 // In browser console:
-fetch('https://synq.alma.dev/diag.js').then(r=>r.text()).then(eval)
+fetch('https://synq.alma.dev/diag.js')
+  .then((r) => r.text())
+  .then(eval)
 
 // Then check stats:
 __diag.stats()
 
 // Stop monitoring:
 __diag.stop()
+
+// Force a snapshot (exposed by client SDK):
+MULTISYNQVM.forceSnapshot()
 ```
 
 ## Cost Optimization
