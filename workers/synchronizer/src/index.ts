@@ -54,17 +54,17 @@ export default {
       return listR2Sessions(env, url)
     }
 
-    // Session info endpoints: /session/{id}, /session/{id}/info, /session/{id}/snapshots
-    if (url.pathname.startsWith('/session/') && request.method === 'GET') {
+    // Session info endpoints: /session/{id}, /session/{id}/info, /session/{id}/snapshots, /session/{id}/requ
+    if (url.pathname.startsWith('/session/') && (request.method === 'GET' || request.method === 'POST')) {
       const parts = url.pathname.split('/').filter(Boolean) // ['session', '{id}', 'info'?]
       const sessionId = parts[1]
-      const subpath = parts[2] // 'info', 'snapshots', or undefined
+      const subpath = parts[2] // 'info', 'snapshots', 'requ', or undefined
       if (sessionId) {
         const id = env.SYNCHRONIZER.idFromName(sessionId)
         const stub = env.SYNCHRONIZER.get(id)
         // Forward to appropriate DO endpoint
-        const doPath = subpath === 'info' ? '/info' : subpath === 'snapshots' ? '/snapshots' : '/health'
-        return stub.fetch(new Request(`${url.origin}${doPath}`))
+        const doPath = subpath === 'info' ? '/info' : subpath === 'snapshots' ? '/snapshots' : subpath === 'requ' ? '/requ' : '/health'
+        return stub.fetch(new Request(`${url.origin}${doPath}`, { method: request.method }))
       }
     }
 

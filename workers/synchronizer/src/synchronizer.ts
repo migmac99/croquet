@@ -166,6 +166,20 @@ export class Synchronizer extends DurableObject<Env> {
       }
     }
 
+    // Manual snapshot request (POST /requ) - sends REQU to all connected clients
+    if (url.pathname.endsWith('/requ') && request.method === 'POST') {
+      const sockets = this.ctx.getWebSockets()
+      if (sockets.length === 0) {
+        return Response.json({ error: 'No clients connected' }, { status: 404 })
+      }
+      this.sendREQU()
+      return Response.json({
+        sent: true,
+        clients: sockets.length,
+        messages: this.state?.messages.length ?? 0,
+      })
+    }
+
     // WebSocket upgrade
     if (request.headers.get('Upgrade') !== 'websocket') return new Response('Expected WebSocket', { status: 426 })
 
@@ -1318,7 +1332,7 @@ export class Synchronizer extends DurableObject<Env> {
         // Check if anyone is listening (active, connected) - matches original reflector
         const sendingTicksTo = (ws: WebSocket): boolean => {
           const att = ws.deserializeAttachment() as WSAttachment
-          return att?.active === true && ws.readyState === WebSocket.READY_STATE_OPEN
+          return att?.active === true && ws.readyState === WebSocket.OPEN
         }
         const anyoneListening = sockets.some(sendingTicksTo)
 
@@ -1326,6 +1340,8 @@ export class Synchronizer extends DurableObject<Env> {
         // but ALWAYS continue to scheduleTick() below (unlike the original reflector's
         // setInterval, alarm-based ticking stops if we don't reschedule).
         if (anyoneListening) {
+          // Capture the time loaded from storage (before advanceTime modifies it)
+          const storedTime = this.state.time
           const time = advanceTime(this.state, 'TICK')
           this.state.lastTick = time
 
@@ -1346,8 +1362,14 @@ export class Synchronizer extends DurableObject<Env> {
           // Track tick count (matches original reflector prometheusTicksCounter)
           this.metrics.ticksTotal++
 
-          // Persist state periodically
-          if (this.state.seq % 100 === 0) await this.ctx.storage.put('state', this.state)
+          // Persist state periodically (~every 5 seconds)
+          // With DO hibernation, in-memory state is lost between alarm wake-ups.
+          // hydrate() reloads from storage each time, so we must persist the updated
+          // time regularly. Compare against the time loaded from storage to know
+          // how long since last persist.
+          if (time - storedTime > 5000) {
+            await this.ctx.storage.put('state', this.state)
+          }
         }
       }
 

@@ -6,7 +6,7 @@
 export function corsHeaders(): Record<string, string> {
   return {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, PUT, POST, OPTIONS',
     'Access-Control-Allow-Headers':
       'Content-Type, Authorization, X-API-Key, X-Croquet-Auth, X-Croquet-App, X-Croquet-Id, X-Croquet-Version, X-Croquet-Path, X-Croquet-Session',
   }
