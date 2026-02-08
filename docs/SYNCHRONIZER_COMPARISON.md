@@ -341,22 +341,34 @@ if (firstToKeep > 0) {
 
 **Original Reflector**:
 ```javascript
-const TICK_MS = 20;  // Default tick rate
+const TICK_MS = 20;  // Default tick rate (50ms = 20 ticks/sec)
 const INITIAL_SEQ = 0xfffffff0 >>> 0;  // 4294967280
 ```
 
-**CF Workers Synchronizer** (lines 5, 9):
+**CF Workers Synchronizer**:
 ```typescript
-const DEFAULT_TICK_MS = 20
+const DEFAULT_TICK_MS = 50   // 20 ticks per second (matches original reflector tps=20)
 const INITIAL_SEQ = 0xfffffff0 >>> 0
 ```
 
-**NO GAP**: Same constants.
+**NO GAP**: Same effective tick rate.
 
-### 6.2 Scale/Time Advancement
+### 6.2 Tick Loop Architecture
+
+**Original Reflector**: Uses `setInterval(tick, tickMS)` in Node.js.
+
+**CF Workers Synchronizer**: Uses `setInterval` (matching the original reflector pattern).
+
+Each session's Durable Object stays in memory while clients are connected. The tick loop runs via `setInterval` at the session's configured tick rate. When all clients disconnect, the loop stops and the DO can hibernate.
+
+A safety alarm (30s) acts as a watchdog — if the DO is evicted and reconstituted by Cloudflare while clients are still connected, the alarm restarts the tick loop.
+
+> **Note**: DO alarms were previously used for sub-second ticking but proved unreliable. Cloudflare throttles alarm delivery for hibernating DOs — each wake-up requires constructor + hydrate + storage reads, causing 15-20s delivery gaps instead of the scheduled 50-200ms. This caused the client's lag to exceed `SYNCED_MAX` (2000ms), triggering `synced=false` cycling.
+
+### 6.3 Scale/Time Advancement
 
 Both systems correctly implement:
-- Scaled time advancement
+- Scaled time advancement (`time.ts:advanceTime`)
 - Min/max scale limits
 - Scale change handling
 
@@ -445,25 +457,50 @@ Heartbeats are sent every 60 seconds to keep session visible in registry (which 
 | Aspect | Original | CF Workers |
 |--------|----------|------------|
 | Process model | Single Node.js process | Durable Objects (per-session) |
-| WebSocket handling | ws library | Native CF WebSockets |
+| WebSocket handling | ws library | Native CF WebSockets + Hibernation API |
+| Tick loop | `setInterval` in Node.js | `setInterval` in DO (same pattern) |
 | Session isolation | In-memory maps | DO isolation |
 | Persistence | GCS + memory | DO storage + R2 |
+| Snapshot storage | Google Cloud Storage | R2 (file server at `/files/*`) |
 | Scaling | Single node | Global edge |
 | Cost model | Server uptime | Request-based + storage |
 
 ---
 
-## 10. Conclusion
+## 10. Diagnostic Tooling
+
+The synchronizer serves a browser diagnostic script at `GET /diag.js`. It intercepts WebSocket messages to track tick timing, connection lifecycle, and tab visibility.
+
+```javascript
+// Load in browser console:
+fetch('https://synq.alma.dev/diag.js').then(r=>r.text()).then(eval)
+
+// Check stats (tick gaps, WS events, tab visibility):
+__diag.stats()
+
+// Stop monitoring:
+__diag.stop()
+```
+
+Key metrics reported:
+- **Tick gap distribution**: min/max/avg/p95 time between TICK messages
+- **WebSocket lifecycle**: open/close/error events with timestamps
+- **Tab visibility**: hidden/visible transitions (detects tab throttling)
+
+---
+
+## 11. Conclusion
 
 The CF Workers Synchronizer now correctly implements:
 - Core session management protocol
 - Message ordering and timestamping
-- Snapshot persistence and resumability
+- Snapshot persistence and resumability (R2 + file server)
 - User presence tracking (USERS messages)
 - Client active state management
 - Session registration with registry (monitoring visibility)
 - API key stats tracking (lastUsed, totalRequests)
 - Periodic heartbeat to keep sessions visible
+- In-memory tick loop via `setInterval` (matches original reflector)
 
 **Remaining gaps** (non-critical):
 1. **Metrics** - Prometheus/OpenMetrics endpoint not implemented

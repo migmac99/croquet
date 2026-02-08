@@ -84,9 +84,10 @@ workers/
 │
 ├── synchronizer/        # WebSocket + Durable Object
 │   ├── src/
-│   │   ├── index.ts         # Router
-│   │   ├── synchronizer.ts  # DO with hibernation
-│   │   ├── storage.ts       # R2 helpers
+│   │   ├── index.ts         # Router + file server + diag endpoint
+│   │   ├── synchronizer.ts  # DO with hibernation + setInterval ticking
+│   │   ├── storage.ts       # R2 snapshot helpers
+│   │   ├── time.ts          # Time/tick pure functions
 │   │   └── types.ts
 │   ├── wrangler.toml
 │   └── package.json
@@ -140,10 +141,13 @@ workers/
 
 ### Synchronizer (synq.alma.dev)
 
-| Endpoint                          | Protocol  | Description        |
-| --------------------------------- | --------- | ------------------ |
-| `wss://synq.alma.dev/{sessionId}` | WebSocket | Session connection |
-| `GET /health`                     | HTTP      | Health check       |
+| Endpoint                          | Protocol  | Description                 |
+| --------------------------------- | --------- | --------------------------- |
+| `wss://synq.alma.dev/{sessionId}` | WebSocket | Session connection          |
+| `GET /health`                     | HTTP      | Health check                |
+| `PUT /files/*`                    | HTTP      | Upload snapshot to R2       |
+| `GET /files/*`                    | HTTP      | Download snapshot from R2   |
+| `GET /diag.js`                    | HTTP      | Browser diagnostic script   |
 
 ### Registry (synqreg.alma.dev)
 
@@ -185,9 +189,32 @@ cd synchronizer && bunx wrangler tail
 cd registry && bunx wrangler tail
 ```
 
+## Tick Architecture
+
+The synchronizer uses `setInterval` for its tick loop — matching the original Node.js reflector's `setInterval(tick, tickMS)` pattern. Each session's Durable Object stays in memory while clients are connected, sending ticks at 20Hz (50ms interval by default).
+
+When all clients disconnect, the tick loop stops and the DO can hibernate. A safety alarm (30s) restarts the tick loop if the DO is evicted and reconstituted while clients are still connected.
+
+> **Why not DO alarms?** Cloudflare throttles alarm delivery for hibernating DOs. Each wake-up requires constructor + hydrate + storage reads, causing 15-20s gaps at sub-second intervals. `setInterval` avoids this entirely.
+
+## Diagnostic Tool
+
+A browser diagnostic script is served at `/diag.js`. It intercepts WebSocket messages to track tick timing, connection lifecycle, and tab visibility — useful for debugging sync issues.
+
+```javascript
+// In browser console:
+fetch('https://synq.alma.dev/diag.js').then(r=>r.text()).then(eval)
+
+// Then check stats:
+__diag.stats()
+
+// Stop monitoring:
+__diag.stop()
+```
+
 ## Cost Optimization
 
-- **DO Hibernation**: Sessions sleep when idle, only wake on messages
+- **DO Hibernation**: Sessions sleep when idle (no clients), only wake on messages
 - **KV for Registry**: Fast global reads, low cost
 - **R2 for Snapshots**: Cheap object storage, auto-prune old snapshots
-- **Alarm-based ticking**: No continuous compute when idle
+- **In-memory ticking**: No alarm overhead — cheaper than 20x/sec alarm wake-ups

@@ -40,7 +40,7 @@ croquet/
 
 ### Reflector vs Synchronizer
 - **Reflector**: Lightweight message relay server (Node.js). Routes messages between clients with timestamps. No state.
-- **Synchronizer**: DEPIN mode. Uses WebRTC data channels for P2P communication with state managed in Durable Objects.
+- **Synchronizer**: Cloudflare Workers replacement for the reflector. Durable Objects provide per-session isolation, R2 stores snapshots, KV handles session registry. Uses `setInterval` for tick loop (same pattern as the original reflector). See `workers/` for the open-source, self-hostable implementation.
 
 ### Connection Modes
 
@@ -134,3 +134,13 @@ URL params for debugging:
 - `?debug=messages` - Message traffic
 - `?debug=snapshot` - Snapshot operations
 - `?debug=reflector` - Use dev reflector
+
+### Synchronizer Diagnostic Tool
+
+The synchronizer serves a browser diagnostic script at `/diag.js`. Tracks tick gaps, WebSocket lifecycle, and tab visibility:
+
+```javascript
+fetch('https://synq.alma.dev/diag.js').then(r=>r.text()).then(eval)
+__diag.stats()  // View tick timing, WS events, tab visibility
+__diag.stop()   // Stop monitoring
+```
