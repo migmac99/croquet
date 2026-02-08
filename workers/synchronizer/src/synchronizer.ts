@@ -1222,6 +1222,11 @@ export class Synchronizer extends DurableObject<Env> {
   /**
    * Handle alarm - used for ticking and cleanup
    * Matches original reflector TICK behavior
+   *
+   * CRITICAL: scheduleTick() must ALWAYS be called at the end, even on error.
+   * Unlike the original reflector's setInterval (which fires unconditionally),
+   * the alarm-based approach requires explicit rescheduling. If scheduleTick()
+   * is missed, ticking stops permanently until a new client connects.
    */
   async alarm(): Promise<void> {
     const sockets = this.ctx.getWebSockets()
@@ -1235,68 +1240,86 @@ export class Synchronizer extends DurableObject<Env> {
       return
     }
 
-    // Check for unresponsive clients (matches original reflector)
-    const currentTime = now()
-    for (const ws of sockets) {
-      const attachment = ws.deserializeAttachment() as WSAttachment | null
-      if (!attachment) continue
+    try {
+      // Check for unresponsive clients (matches original reflector)
+      const currentTime = now()
+      for (const ws of sockets) {
+        try {
+          const attachment = ws.deserializeAttachment() as WSAttachment | null
+          if (!attachment) continue
 
-      const inactivity = currentTime - attachment.lastSeen
-      if (inactivity > DISCONNECT_THRESHOLD_MS) {
-        // Client unresponsive for too long - disconnect
-        console.log(`[${this.sessionId}] Disconnecting unresponsive client ${attachment.clientId} (inactive ${inactivity}ms)`)
-        ws.close(CLOSE_REASONS.UNRESPONSIVE[0], CLOSE_REASONS.UNRESPONSIVE[1])
-      } else if (inactivity > PING_THRESHOLD_MS) {
-        // Client hasn't been heard from in a while - send server-initiated PING
-        const pingMsg = { id: this.sessionId, action: 'PING', args: currentTime }
-        ws.send(JSON.stringify(pingMsg))
+          const inactivity = currentTime - attachment.lastSeen
+          if (inactivity > DISCONNECT_THRESHOLD_MS) {
+            // Client unresponsive for too long - disconnect
+            console.log(`[${this.sessionId}] Disconnecting unresponsive client ${attachment.clientId} (inactive ${inactivity}ms)`)
+            ws.close(CLOSE_REASONS.UNRESPONSIVE[0], CLOSE_REASONS.UNRESPONSIVE[1])
+          } else if (inactivity > PING_THRESHOLD_MS) {
+            // Client hasn't been heard from in a while - send server-initiated PING
+            const pingMsg = { id: this.sessionId, action: 'PING', args: currentTime }
+            ws.send(JSON.stringify(pingMsg))
+          }
+        } catch (err) {
+          console.error(`[${this.sessionId}] Error checking client activity:`, err)
+        }
       }
-    }
 
-    // Check for timed-out TUTTI tallies (matches original reflector TALLY_INTERVAL)
-    this.checkTallyTimeouts()
+      // Check for timed-out TUTTI tallies (matches original reflector TALLY_INTERVAL)
+      this.checkTallyTimeouts()
 
-    // Tick: advance time and broadcast (matches original reflector TICK function)
-    // Only advance time if someone is listening - avoids time skew when no clients connected
-    if (this.state) {
-      // Check if anyone is listening (active, connected) - matches original reflector
-      const sendingTicksTo = (ws: WebSocket): boolean => {
-        const att = ws.deserializeAttachment() as WSAttachment
-        return att?.active === true && ws.readyState === WebSocket.READY_STATE_OPEN
+      // Tick: advance time and broadcast (matches original reflector TICK function)
+      if (this.state) {
+        // Check if anyone is listening (active, connected) - matches original reflector
+        const sendingTicksTo = (ws: WebSocket): boolean => {
+          const att = ws.deserializeAttachment() as WSAttachment
+          return att?.active === true && ws.readyState === WebSocket.READY_STATE_OPEN
+        }
+        const anyoneListening = sockets.some(sendingTicksTo)
+
+        // Only advance time and send ticks if someone is listening,
+        // but ALWAYS continue to scheduleTick() below (unlike the original reflector's
+        // setInterval, alarm-based ticking stops if we don't reschedule).
+        if (anyoneListening) {
+          const time = advanceTime(this.state, 'TICK')
+          this.state.lastTick = time
+
+          // Check rawtime flag - if set, send raw monotonic time instead of scaled time
+          // (matches original reflector behavior)
+          const tickTime = this.state.flags?.rawtime ? currentTime - this.state.rawStart : time
+          const tickMsg = JSON.stringify({ id: this.sessionId, action: 'TICK', args: tickTime })
+
+          // Only send to active, connected clients (matches original reflector)
+          sockets.forEach((ws) => {
+            try {
+              if (sendingTicksTo(ws)) ws.send(tickMsg)
+            } catch (err) {
+              console.error(`[${this.sessionId}] Error sending tick:`, err)
+            }
+          })
+
+          // Track tick count (matches original reflector prometheusTicksCounter)
+          this.metrics.ticksTotal++
+
+          // Persist state periodically
+          if (this.state.seq % 100 === 0) await this.ctx.storage.put('state', this.state)
+        }
       }
-      const anyoneListening = sockets.some(sendingTicksTo)
-      if (!anyoneListening) return // Don't advance time if nobody hears us (matches original reflector)
 
-      const time = advanceTime(this.state, 'TICK')
-      this.state.lastTick = time
+      // Update session tracking periodically (keeps session visible in manager UI)
+      // Session KV records use TTL, so we need periodic updates
+      if (this.trackedInKV) this.updateSessionTracking(sockets.length)
 
-      // Check rawtime flag - if set, send raw monotonic time instead of scaled time
-      // (matches original reflector behavior)
-      const tickTime = this.state.flags?.rawtime ? currentTime - this.state.rawStart : time
-      const tickMsg = JSON.stringify({ id: this.sessionId, action: 'TICK', args: tickTime })
-
-      // Only send to active, connected clients (matches original reflector)
-      sockets.forEach((ws) => {
-        if (sendingTicksTo(ws)) ws.send(tickMsg)
-      })
-
-      // Track tick count (matches original reflector prometheusTicksCounter)
-      this.metrics.ticksTotal++
-
-      // Persist state periodically
-      if (this.state.seq % 100 === 0) await this.ctx.storage.put('state', this.state)
+      // Prune old snapshots periodically (reuse currentTime from above)
+      const currentTimeForPrune = now()
+      if (this.storage && currentTimeForPrune - this.lastSnapshotPrune > SNAPSHOT_PRUNE_INTERVAL_MS) {
+        this.storage.prune(5).catch((err) => console.error('Snapshot prune failed:', err))
+        this.lastSnapshotPrune = currentTimeForPrune
+      }
+    } catch (err) {
+      console.error(`[${this.sessionId}] Alarm handler error:`, err)
     }
 
-    // Update session tracking periodically (keeps session visible in manager UI)
-    // Session KV records use TTL, so we need periodic updates
-    if (this.trackedInKV) this.updateSessionTracking(sockets.length)
-
-    // Prune old snapshots periodically (reuse currentTime from above)
-    if (this.storage && currentTime - this.lastSnapshotPrune > SNAPSHOT_PRUNE_INTERVAL_MS) {
-      this.storage.prune(5).catch((err) => console.error('Snapshot prune failed:', err))
-      this.lastSnapshotPrune = currentTime
-    }
-
+    // ALWAYS reschedule - the tick loop must never die while clients are connected.
+    // This is outside the try/catch to ensure it runs even on error.
     this.scheduleTick()
   }
 
