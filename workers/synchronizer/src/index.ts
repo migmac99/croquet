@@ -68,6 +68,12 @@ export default {
       }
     }
 
+    // File server endpoints - serves as snapshot storage for the Croquet client
+    // Client configures ?files=https://synq.alma.dev/files to upload/download here
+    if (url.pathname.startsWith('/files/')) {
+      return handleFileRequest(request, env, url)
+    }
+
     // WebSocket upgrade - extract session from path
     // Expected format: /reflector/{sessionId} or /{version}/{sessionId}
     if (request.headers.get('Upgrade')?.toLowerCase() === 'websocket') {
@@ -183,6 +189,58 @@ async function handleApiKeyValidation(request: Request, env: Env): Promise<Respo
   // Fallback - format-only validation (for local dev without KV)
   console.log(`[sync] No APIKEYS KV available, using format-only validation`)
   return jsonResponse({ success: true })
+}
+
+/**
+ * Handle file server requests (snapshot upload/download)
+ * The Croquet client uploads encrypted snapshots here when configured with ?files=<url>
+ *
+ * Protocol:
+ * - GET with X-Croquet-Auth header: Signing request → return { read, write } URLs (passthrough)
+ * - GET without auth: Download request → serve binary from R2
+ * - PUT: Upload request → store binary in R2
+ */
+async function handleFileRequest(request: Request, env: Env, url: URL): Promise<Response> {
+  if (!env.SNAPSHOTS) {
+    return errorResponse('No storage configured', 503)
+  }
+
+  // Extract the path after /files/ and use as R2 key
+  const filePath = url.pathname.slice('/files/'.length)
+  if (!filePath) return errorResponse('Missing file path', 400)
+  const r2Key = `files/${filePath}`
+
+  if (request.method === 'GET') {
+    // Check if this is a signing request (client getting upload URL)
+    if (request.headers.get('X-Croquet-Auth')) {
+      // Return the same URL for both read and write (no signing needed for our own R2)
+      const fileUrl = `${url.origin}/files/${filePath}`
+      return Response.json({ read: fileUrl, write: fileUrl }, { headers: corsHeaders() })
+    }
+
+    // Download request - serve from R2
+    const obj = await env.SNAPSHOTS.get(r2Key)
+    if (!obj) return new Response('Not found', { status: 404, headers: corsHeaders() })
+
+    return new Response(obj.body, {
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': String(obj.size),
+        'Cache-Control': 'public, max-age=31536000, immutable',
+        ...corsHeaders(),
+      },
+    })
+  }
+
+  if (request.method === 'PUT') {
+    const body = await request.arrayBuffer()
+    await env.SNAPSHOTS.put(r2Key, body, {
+      httpMetadata: { contentType: 'application/octet-stream' },
+    })
+    return new Response(null, { status: 200, headers: corsHeaders() })
+  }
+
+  return errorResponse('Method not allowed', 405)
 }
 
 /**

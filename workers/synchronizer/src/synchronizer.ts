@@ -268,11 +268,12 @@ export class Synchronizer extends DurableObject<Env> {
     // Check if session is now empty
     const remaining = this.ctx.getWebSockets().length
     if (remaining === 0) {
-      // Request snapshot before last client disconnects
-      // This ensures we have a recent snapshot + small message buffer for rejoins
+      // Note: Can't request snapshot here (last client is already disconnecting, REQU would go to nobody).
+      // Snapshots are taken during normal operation via the client's CPU-time-based mechanism.
       if (this.state && this.state.messages.length > 0) {
-        console.log(`[${this.sessionId}] Last client disconnecting - requesting snapshot (${this.state.messages.length} messages buffered)`)
-        this.sendREQU()
+        console.log(
+          `[${this.sessionId}] Last client disconnected - ${this.state.messages.length} messages buffered, snapshot=${this.state.snapshotUrl ? 'yes' : 'none'}`
+        )
       }
 
       // Save message buffer to R2 for durability (in case DO is evicted)
@@ -435,8 +436,17 @@ export class Synchronizer extends DurableObject<Env> {
       }
     }
 
-    // Build snapshot URL if we have one (empty string if none, matching reflector behavior)
-    const snapshotUrl = snapshot ? `data:application/octet-stream;base64,${arrayBufferToBase64(snapshot)}` : ''
+    // Build snapshot URL - prefer R2 snapshot, fall back to stored file server URL
+    let snapshotUrl = ''
+    if (snapshot) {
+      snapshotUrl = `data:application/octet-stream;base64,${arrayBufferToBase64(snapshot)}`
+    } else if (this.state.snapshotUrl && !this.state.snapshotUrl.startsWith('snapshot:')) {
+      // We have a file server URL from a client SNAP announcement (standard Croquet protocol)
+      snapshotUrl = this.state.snapshotUrl
+      snapshotTime = this.state.snapshotTime || 0
+      snapshotSeq = this.state.snapshotSeq || 0
+      console.log(`[${this.sessionId}] Using stored snapshot URL: time=${snapshotTime}, seq=${snapshotSeq}`)
+    }
 
     // If no snapshot and persistentId provided, lookup persistent URL from registry
     // Note: persistentUrl is set ONCE at session start, never updated by SAVE (matches original reflector)
@@ -880,14 +890,33 @@ export class Synchronizer extends DurableObject<Env> {
     this.ctx.storage.put('state', this.state)
   }
 
+  /** Purge buffered messages up to the given snapshot seq (matches original reflector) */
+  private purgeMessagesUpTo(snapshotSeq: number): void {
+    if (!this.state) return
+    const msgs = this.state.messages
+    if (msgs.length > 0) {
+      const firstToKeep = msgs.findIndex((msg) => after(snapshotSeq, msg[1] as number))
+      if (firstToKeep > 0) {
+        msgs.splice(0, firstToKeep)
+        console.log(`[${this.sessionId}] Purged ${firstToKeep} messages, keeping ${msgs.length}`)
+      } else if (firstToKeep === -1) {
+        msgs.length = 0
+        console.log(`[${this.sessionId}] Purged all messages`)
+      }
+    }
+  }
+
   /**
    * Handle SNAP - snapshot operations
-   * Matches original reflector SNAP behavior including message buffer management
+   * Supports both:
+   * 1. Standard Croquet protocol: args = { time, seq, hash, url } (client uploaded to file server)
+   * 2. Custom direct protocol: args = { action: 'request'|'response', ... } (client sends data via WS)
    */
   private async handleSnap(ws: WebSocket, attachment: WSAttachment, args: Record<string, unknown>): Promise<void> {
-    const action = args.action as string
+    const action = args.action as string | undefined
 
     if (action === 'request') {
+      // Custom protocol: client explicitly requests to take a snapshot
       if (this.pendingSnapshot) return
 
       this.pendingSnapshot = { clientId: attachment.clientId, time: this.state?.time || 0 }
@@ -898,6 +927,7 @@ export class Synchronizer extends DurableObject<Env> {
       }
       ws.send(JSON.stringify(snapRequest))
     } else if (action === 'response') {
+      // Custom protocol: client sends snapshot data directly
       const { data: snapshotData, time, seq } = args
       console.log(`[${this.sessionId}] SNAP response received: time=${time}, seq=${seq}, dataLen=${(snapshotData as string)?.length || 0}`)
       if (!this.storage || !snapshotData || !this.state) {
@@ -912,22 +942,7 @@ export class Synchronizer extends DurableObject<Env> {
         const data = base64ToArrayBuffer(snapshotData as string)
         await this.storage.save(data, snapshotTime, snapshotSeq)
 
-        // Purge messages up to snapshot seq (matches original reflector behavior)
-        // Keep messages with seq > snapshotSeq for late-joiner catchup
-        const msgs = this.state.messages
-        if (msgs.length > 0) {
-          // Find first message to keep (seq after snapshot) - use wraparound-safe comparison
-          const firstToKeep = msgs.findIndex((msg) => after(snapshotSeq, msg[1] as number))
-          if (firstToKeep > 0) {
-            // Splice out messages before snapshot
-            msgs.splice(0, firstToKeep)
-            console.log(`[${this.sessionId}] Purged ${firstToKeep} messages, keeping ${msgs.length}`)
-          } else if (firstToKeep === -1) {
-            // All messages are before or at snapshot, clear all
-            msgs.length = 0
-            console.log(`[${this.sessionId}] Purged all messages`)
-          }
-        }
+        this.purgeMessagesUpTo(snapshotSeq)
 
         // Update snapshot metadata
         this.state.snapshotTime = snapshotTime
@@ -942,6 +957,38 @@ export class Synchronizer extends DurableObject<Env> {
       }
 
       this.pendingSnapshot = null
+    } else if (args.url) {
+      // Standard Croquet protocol: client uploaded snapshot to file server and announces URL
+      // Format: { time, seq, hash, url, auditStats?, dissident? }
+      const { time, seq, hash, url, dissident } = args
+      const snapshotTime = time as number
+      const snapshotSeq = seq as number
+
+      if (dissident) {
+        console.log(`[${this.sessionId}] Dissident snapshot from ${attachment.clientId} - ignoring`)
+        return
+      }
+
+      if (!this.state) return
+
+      // Ignore if not newer than current snapshot (matches original reflector)
+      if (snapshotTime <= (this.state.snapshotTime || -1)) {
+        console.log(`[${this.sessionId}] Ignoring snapshot: time=${snapshotTime} <= current=${this.state.snapshotTime}`)
+        return
+      }
+
+      console.log(`[${this.sessionId}] SNAP from client: time=${snapshotTime}, seq=${snapshotSeq}, hash=${hash}, url=${(url as string)?.slice(0, 80)}...`)
+
+      this.purgeMessagesUpTo(snapshotSeq)
+
+      // Store snapshot URL and metadata (matches original reflector: island.snapshotUrl = url)
+      this.state.snapshotTime = snapshotTime
+      this.state.snapshotSeq = snapshotSeq
+      this.state.snapshotUrl = url as string
+
+      await this.ctx.storage.put('state', this.state)
+
+      console.log(`[${this.sessionId}] Snapshot recorded: time=${snapshotTime}, seq=${snapshotSeq}, messages remaining=${this.state.messages.length}`)
     }
   }
 
