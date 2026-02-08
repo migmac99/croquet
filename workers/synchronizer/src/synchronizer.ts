@@ -110,6 +110,21 @@ export class Synchronizer extends DurableObject<Env> {
         if (!this.state.timeline) this.state.timeline = generateTimeline()
         if (!this.state.flags || typeof this.state.flags !== 'object') this.state.flags = {}
 
+        // Migrate: seed snapshotHistory from existing snapshot metadata
+        if (!this.state.snapshotHistory) {
+          this.state.snapshotHistory = []
+          if (this.state.snapshotTime && this.state.snapshotSeq) {
+            this.state.snapshotHistory.push({
+              time: this.state.snapshotTime,
+              seq: this.state.snapshotSeq,
+              size: 0,
+              createdAt: this.state.lastActivity || Date.now(),
+              source: this.state.snapshotUrl?.startsWith('snapshot:') ? 'direct' : 'file-server',
+              url: this.state.snapshotUrl?.startsWith('snapshot:') ? undefined : this.state.snapshotUrl,
+            })
+          }
+        }
+
         if (this.env.SNAPSHOTS) this.storage = new SnapshotStorage(this.env.SNAPSHOTS, this.sessionId)
       } else {
         console.log(`[${this.sessionId}] No state found in storage (fresh DO)`)
@@ -963,6 +978,20 @@ export class Synchronizer extends DurableObject<Env> {
         this.state.snapshotSeq = snapshotSeq
         this.state.snapshotUrl = `snapshot:${snapshotSeq}` // Reference for latest
 
+        // Record in unified snapshot history for synqmanager visibility
+        if (!this.state.snapshotHistory) this.state.snapshotHistory = []
+        this.state.snapshotHistory.push({
+          time: snapshotTime,
+          seq: snapshotSeq,
+          size: data.byteLength,
+          createdAt: Date.now(),
+          source: 'direct',
+          r2Key: `sessions/${this.sessionId}/snapshots/${snapshotTime}-${snapshotSeq}.bin`,
+        })
+        if (this.state.snapshotHistory.length > 20) {
+          this.state.snapshotHistory = this.state.snapshotHistory.slice(-20)
+        }
+
         await this.ctx.storage.put('state', this.state)
 
         console.log(`[${this.sessionId}] Snapshot saved: time=${snapshotTime}, seq=${snapshotSeq}, size=${data.byteLength}`)
@@ -1000,9 +1029,38 @@ export class Synchronizer extends DurableObject<Env> {
       this.state.snapshotSeq = snapshotSeq
       this.state.snapshotUrl = url as string
 
+      // Record in unified snapshot history for synqmanager visibility
+      if (!this.state.snapshotHistory) this.state.snapshotHistory = []
+      let size = 0
+      const fileUrl = url as string
+      const filesPrefix = '/files/'
+      const idx = fileUrl.indexOf(filesPrefix)
+      if (idx !== -1 && this.env.SNAPSHOTS) {
+        try {
+          const r2Key = `files/${fileUrl.slice(idx + filesPrefix.length)}`
+          const head = await this.env.SNAPSHOTS.head(r2Key)
+          if (head) size = head.size
+        } catch {
+          // R2 head failed, size stays 0
+        }
+      }
+      this.state.snapshotHistory.push({
+        time: snapshotTime,
+        seq: snapshotSeq,
+        size,
+        createdAt: Date.now(),
+        source: 'file-server',
+        url: fileUrl,
+      })
+      if (this.state.snapshotHistory.length > 20) {
+        this.state.snapshotHistory = this.state.snapshotHistory.slice(-20)
+      }
+
       await this.ctx.storage.put('state', this.state)
 
-      console.log(`[${this.sessionId}] Snapshot recorded: time=${snapshotTime}, seq=${snapshotSeq}, messages remaining=${this.state.messages.length}`)
+      console.log(
+        `[${this.sessionId}] Snapshot recorded: time=${snapshotTime}, seq=${snapshotSeq}, size=${size}, messages remaining=${this.state.messages.length}`
+      )
     }
   }
 
@@ -1704,15 +1762,35 @@ export class Synchronizer extends DurableObject<Env> {
   }
 
   /**
-   * Get list of snapshots for this session from R2
+   * Get list of snapshots for this session (unified across both protocols)
    */
   private async getSnapshotList(): Promise<Record<string, unknown>> {
+    const current = this.state ? { time: this.state.snapshotTime, seq: this.state.snapshotSeq } : null
+
+    // Primary: read from unified snapshot history in DO state
+    if (this.state?.snapshotHistory?.length) {
+      return {
+        sessionId: this.sessionId,
+        snapshots: this.state.snapshotHistory.map((s) => ({
+          time: s.time,
+          seq: s.seq,
+          size: s.size,
+          sizeHuman: formatBytes(s.size),
+          createdAt: s.createdAt,
+          createdAtHuman: new Date(s.createdAt).toISOString(),
+          source: s.source,
+        })),
+        current,
+      }
+    }
+
+    // Fallback: R2 scan for legacy sessions without snapshotHistory
     if (!this.storage) {
-      return { sessionId: this.sessionId, snapshots: [], error: 'No storage configured' }
+      return { sessionId: this.sessionId, snapshots: [], current }
     }
 
     try {
-      const snapshots = await this.storage.list(20) // Get last 20 snapshots
+      const snapshots = await this.storage.list(20)
       return {
         sessionId: this.sessionId,
         snapshots: snapshots.map((s) => ({
@@ -1722,13 +1800,9 @@ export class Synchronizer extends DurableObject<Env> {
           sizeHuman: formatBytes(s.size),
           createdAt: s.createdAt,
           createdAtHuman: new Date(s.createdAt).toISOString(),
+          source: 'direct',
         })),
-        current: this.state
-          ? {
-              time: this.state.snapshotTime,
-              seq: this.state.snapshotSeq,
-            }
-          : null,
+        current,
       }
     } catch (err) {
       return { sessionId: this.sessionId, snapshots: [], error: String(err) }

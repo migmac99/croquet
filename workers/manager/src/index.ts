@@ -2315,6 +2315,8 @@ async function getStorageUI(env: Env, user: AuthenticatedUser): Promise<Response
     avgSnapshotsPerSession: number
     avgSizePerSession: number
     avgSnapshotSize: number
+    fileServerObjects: number // Objects under files/ prefix (standard protocol)
+    fileServerSize: number
   }
 
   // Helper to scan R2 bucket (gracefully handles missing binding)
@@ -2330,6 +2332,8 @@ async function getStorageUI(env: Env, user: AuthenticatedUser): Promise<Response
 
     let objectCount = 0
     let totalSize = 0
+    let fileServerObjectCount = 0
+    let fileServerTotalSize = 0
     const recentKeys: Array<{ namespace: string; key: string; size: number; updatedAt?: number }> = []
     const sessionIds = new Set<string>()
     const sessionSizes = new Map<string, number>() // Track total size per session
@@ -2342,19 +2346,24 @@ async function getStorageUI(env: Env, user: AuthenticatedUser): Promise<Response
         objectCount++
         totalSize += obj.size
 
-        // Extract session ID from key: sessions/${sessionId}/snapshots/${time}-${seq}.bin
-        const match = obj.key.match(/^sessions\/([^/]+)\/snapshots\//)
-        if (match) {
-          const sessionId = match[1]
+        // Match both snapshot storage patterns:
+        // 1. sessions/{sessionId}/snapshots/{time}-{seq}.bin (custom/direct protocol)
+        // 2. files/* (standard file-server protocol - client-uploaded snapshots)
+        const sessionMatch = obj.key.match(/^sessions\/([^/]+)\/snapshots\//)
+        if (sessionMatch) {
+          const sessionId = sessionMatch[1]
           sessionIds.add(sessionId)
           sessionSizes.set(sessionId, (sessionSizes.get(sessionId) || 0) + obj.size)
           sessionCounts.set(sessionId, (sessionCounts.get(sessionId) || 0) + 1)
+        } else if (obj.key.startsWith('files/')) {
+          fileServerObjectCount++
+          fileServerTotalSize += obj.size
         }
 
-        // Keep track of recent objects (first 5, sorted by upload time)
-        if (recentKeys.length < 5) {
+        // Keep track of recent objects (first 10)
+        if (recentKeys.length < 10) {
           recentKeys.push({
-            namespace: 'Snapshots',
+            namespace: sessionMatch ? 'Snapshots (direct)' : obj.key.startsWith('files/') ? 'Snapshots (file-server)' : 'Other',
             key: obj.key,
             size: obj.size,
             updatedAt: obj.uploaded?.getTime(),
@@ -2364,7 +2373,7 @@ async function getStorageUI(env: Env, user: AuthenticatedUser): Promise<Response
       cursor = list.truncated ? list.cursor : undefined
     } while (cursor)
 
-    // Calculate snapshot metrics
+    // Calculate snapshot metrics (includes both storage paths)
     const totalSessions = sessionIds.size
     const snapshotMetrics: SnapshotMetrics = {
       totalSessions,
@@ -2373,6 +2382,8 @@ async function getStorageUI(env: Env, user: AuthenticatedUser): Promise<Response
       avgSnapshotsPerSession: totalSessions > 0 ? Math.round((objectCount / totalSessions) * 10) / 10 : 0,
       avgSizePerSession: totalSessions > 0 ? Math.round(totalSize / totalSessions) : 0,
       avgSnapshotSize: objectCount > 0 ? Math.round(totalSize / objectCount) : 0,
+      fileServerObjects: fileServerObjectCount,
+      fileServerSize: fileServerTotalSize,
     }
 
     return {

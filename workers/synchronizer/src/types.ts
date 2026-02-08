@@ -80,6 +80,19 @@ export interface SessionState {
   appId?: string // Application ID from JOIN args
   persistentId?: string // Persistent data ID from JOIN args
   persistentUrl?: string // URL of persistent data (set once at session start, NOT updated by SAVE)
+  // Unified snapshot history (tracks all snapshots regardless of protocol)
+  snapshotHistory?: SnapshotHistoryEntry[]
+}
+
+// Snapshot history entry for unified tracking across both standard and custom protocols
+export interface SnapshotHistoryEntry {
+  time: number
+  seq: number
+  size: number // 0 if unknown (URL-based snapshots where R2 head fails)
+  createdAt: number
+  source: 'file-server' | 'direct'
+  url?: string // file server URL (standard protocol)
+  r2Key?: string // R2 key (custom/direct protocol)
 }
 
 // Snapshot metadata

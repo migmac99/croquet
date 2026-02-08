@@ -818,6 +818,8 @@ interface SnapshotMetrics {
   avgSnapshotsPerSession: number
   avgSizePerSession: number
   avgSnapshotSize: number
+  fileServerObjects: number
+  fileServerSize: number
 }
 
 export function renderStoragePage(
@@ -912,6 +914,8 @@ export function renderStoragePage(
     avgSnapshotsPerSession: 0,
     avgSizePerSession: 0,
     avgSnapshotSize: 0,
+    fileServerObjects: 0,
+    fileServerSize: 0,
   }
   const snapshotStatsHtml = `
     <div class="card">
@@ -950,6 +954,27 @@ export function renderStoragePage(
             <div class="text-3xl font-bold mt-2">${formatSize(metrics.avgSnapshotSize)}</div>
           </div>
         </div>
+        <!-- Row 3: File server objects -->
+        ${
+          metrics.fileServerObjects > 0
+            ? `
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-6">
+          <div class="p-4 bg-secondary/30 rounded-lg">
+            <div class="text-muted-foreground text-sm font-medium">File Server Objects</div>
+            <div class="text-3xl font-bold mt-2">${formatNumber(metrics.fileServerObjects)}</div>
+          </div>
+          <div class="p-4 bg-secondary/30 rounded-lg">
+            <div class="text-muted-foreground text-sm font-medium">File Server Size</div>
+            <div class="text-3xl font-bold mt-2">${formatSize(metrics.fileServerSize)}</div>
+          </div>
+          <div class="p-4 bg-secondary/30 rounded-lg">
+            <div class="text-muted-foreground text-sm font-medium">Avg. File Size</div>
+            <div class="text-3xl font-bold mt-2">${formatSize(Math.round(metrics.fileServerSize / metrics.fileServerObjects))}</div>
+          </div>
+        </div>
+        `
+            : ''
+        }
       </div>
     </div>`
 
@@ -1051,6 +1076,7 @@ export interface SessionInspectorData {
     sizeHuman: string
     createdAt: number
     createdAtHuman: string
+    source?: string // 'file-server' | 'direct'
   }>
   synchronizerUrl: string
 }
@@ -1092,7 +1118,10 @@ export function renderSessionInspectorPage(data: SessionInspectorData, user: str
           <div class="font-mono text-sm">seq: ${s.seq}, time: ${s.time}</div>
           <div class="text-xs text-muted-foreground mt-1">${s.createdAtHuman}</div>
         </div>
-        <span class="badge">${s.sizeHuman}</span>
+        <div class="flex items-center gap-2">
+          ${s.source ? `<span class="badge badge-outline text-xs">${s.source}</span>` : ''}
+          <span class="badge">${s.sizeHuman}</span>
+        </div>
       </div>
     </div>`
           )
