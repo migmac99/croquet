@@ -551,14 +551,44 @@ export class Synchronizer extends DurableObject<Env> {
     // syncTime is the time at the snapshot (or 0 for fresh init)
     const syncTime = clientMustInitFresh ? 0 : snapshotTime
 
-    // Validate message buffer consistency with snapshot
-    // This catches corruption from hibernation/wake or stale state
+    // Validate message buffer consistency
+    // This catches corruption from hibernation/wake, stale state, or pre-fix send errors
     let stateWasCorrected = false
+
+    // Detect internal seq gaps in the message buffer (runs on ALL non-empty buffers)
+    // A gap means a message was lost (e.g. from a send error before the buffer-before-send fix).
+    // Corrupted buffers cause "Expected message #X got #Y" errors on every reconnection.
+    if (this.state.messages.length > 1) {
+      for (let i = 1; i < this.state.messages.length; i++) {
+        const prevSeq = (this.state.messages[i - 1] as number[])?.[1]
+        const currSeq = (this.state.messages[i] as number[])?.[1]
+        if (prevSeq !== undefined && currSeq !== undefined) {
+          const expectedSeq = (prevSeq + 1) >>> 0
+          if (currSeq !== expectedSeq) {
+            console.error(
+              `[${this.sessionId}] BUFFER GAP DETECTED at index ${i}: expected seq=${expectedSeq} got seq=${currSeq}. ` +
+                `Clearing corrupted buffer (${this.state.messages.length} messages). ` +
+                `hasSnapshot=${!!snapshotUrl}, snapshotSeq=${snapshotSeq}`
+            )
+            this.state.messages = []
+            // Reset seq so new messages sequence correctly
+            if (snapshotSeq) {
+              this.state.seq = snapshotSeq
+            } else {
+              this.state.seq = INITIAL_SEQ
+            }
+            stateWasCorrected = true
+            break
+          }
+        }
+      }
+    }
+
     if (!clientMustInitFresh && this.state.messages.length > 0) {
       const firstMsgSeq = (this.state.messages[0] as number[])?.[1]
       const lastMsgSeq = (this.state.messages[this.state.messages.length - 1] as number[])?.[1]
 
-      // Log warnings about inconsistencies but NEVER clear messages
+      // Log warnings about inconsistencies
       if (firstMsgSeq !== undefined && !after(snapshotSeq, firstMsgSeq)) {
         console.warn(
           `[${this.sessionId}] Message buffer note: first msg seq=${firstMsgSeq} not after snapshot seq=${snapshotSeq}. Keeping messages for catchup.`
@@ -571,6 +601,7 @@ export class Synchronizer extends DurableObject<Env> {
         stateWasCorrected = true
       }
     }
+
     // Persist corrections to prevent repeated issues
     if (stateWasCorrected) {
       this.ctx.storage.put('state', this.state)
@@ -704,15 +735,30 @@ export class Synchronizer extends DurableObject<Env> {
         `active=${active}, total=${total}, joined=${JSON.stringify(joined)}, left=${JSON.stringify(left)}`
     )
 
-    // Broadcast RECV to all active clients
-    const recvMsg = { id: this.sessionId, action: 'RECV', args: message }
-    const msgStr = JSON.stringify(recvMsg)
-    activeClients.forEach((ws) => ws.send(msgStr))
-
-    // Buffer message for late-joiner catchup
+    // CRITICAL: Buffer message BEFORE sending to clients
+    // This ensures the buffer is consistent even if sends fail
+    // (a client that misses the live send will get it via SYNC on reconnect)
     this.state.messages.push(message)
     this.state.lastMsgTime = time
     this.state.lastActivity = now() // Track activity for warm/cold session detection
+
+    // Broadcast RECV to all active clients with error handling
+    // Match original reflector's safeSend pattern: skip disconnected clients, don't abort on errors
+    const recvMsg = { id: this.sessionId, action: 'RECV', args: message }
+    const msgStr = JSON.stringify(recvMsg)
+    for (const ws of activeClients) {
+      try {
+        ws.send(msgStr)
+      } catch (err) {
+        const att = ws.deserializeAttachment() as WSAttachment
+        console.error(`[${this.sessionId}] USERS send error (client ${att?.clientId}):`, err)
+        try {
+          ws.close(1011, 'send failed')
+        } catch {
+          /* already closing */
+        }
+      }
+    }
 
     // Persist state - await to ensure it completes before hibernation
     await this.ctx.storage.put('state', this.state)
@@ -873,13 +919,14 @@ export class Synchronizer extends DurableObject<Env> {
     // Debug: log SEND message received
     console.log(`[${this.sessionId}] SEND: time=${time}, seq=${this.state.seq}, payload=${JSON.stringify(message[2]).slice(0, 100)}`)
 
-    // Broadcast RECV to all clients (official format)
-    const recvMsg = { id: this.sessionId, action: 'RECV', args: message }
-    this.broadcast(JSON.stringify(recvMsg))
-
-    // Buffer message for late-joiner catchup (matches original: island.messages.push(message))
+    // CRITICAL: Buffer message BEFORE sending to clients
+    // This ensures the buffer is consistent even if sends fail
     this.state.messages.push(message)
     this.state.lastMsgTime = time
+
+    // Broadcast RECV to all active clients (official format)
+    const recvMsg = { id: this.sessionId, action: 'RECV', args: message }
+    this.broadcast(JSON.stringify(recvMsg))
 
     // Track message count (matches original reflector prometheusMessagesCounter)
     this.metrics.messagesTotal++
@@ -1279,13 +1326,14 @@ export class Synchronizer extends DurableObject<Env> {
     // If rawtime flag is set, overwrite last element with raw time
     if (this.state.flags?.rawtime && message.length > 3) message[message.length - 1] = getRawTime(this.state)
 
-    // Broadcast RECV to all clients
-    const recvMsg = { id: this.sessionId, action: 'RECV', args: message }
-    this.broadcast(JSON.stringify(recvMsg))
-
-    // Buffer for late-joiner catchup
+    // CRITICAL: Buffer message BEFORE sending to clients
+    // This ensures the buffer is consistent even if sends fail
     this.state.messages.push(message)
     this.state.lastMsgTime = time
+
+    // Broadcast RECV to all active clients
+    const recvMsg = { id: this.sessionId, action: 'RECV', args: message }
+    this.broadcast(JSON.stringify(recvMsg))
   }
 
   /**
@@ -1514,15 +1562,24 @@ export class Synchronizer extends DurableObject<Env> {
    * Broadcast message to all connected clients
    */
   private broadcast(message: string, excludeClientId?: string): void {
+    // Match original reflector: only send to active clients (each.active && each.safeSend)
+    // Non-active clients (still in SYNC phase) must not receive sequenced messages
+    // because they get the complete buffer via SYNC
     for (const ws of this.ctx.getWebSockets()) {
       try {
-        if (excludeClientId) {
-          const attachment = ws.deserializeAttachment() as WSAttachment | null
-          if (attachment?.clientId === excludeClientId) continue
-        }
+        const attachment = ws.deserializeAttachment() as WSAttachment | null
+        if (!attachment?.active) continue // Only send to active clients (matches original reflector)
+        if (excludeClientId && attachment.clientId === excludeClientId) continue
         ws.send(message)
       } catch (err) {
-        console.error('Broadcast send error:', err)
+        // Match original reflector's safeSend: silently skip if not connected
+        // Log for debugging but don't abort — remaining clients must still receive the message
+        console.error(`[${this.sessionId}] Broadcast send error (client ${(ws.deserializeAttachment() as WSAttachment)?.clientId}):`, err)
+        try {
+          ws.close(1011, 'send failed')
+        } catch {
+          /* already closing */
+        }
       }
     }
   }
