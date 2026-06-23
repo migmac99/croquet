@@ -1,0 +1,112 @@
+/* ButtonStyles.css */
+:root {
+    --color-primary: #3b82f6;
+    --color-primary-hover: #2563eb;
+    --color-caution: #ff3d32;
+    --color-caution-hover: #d9342b;
+    --color-border: #2d3748;
+    --color-border-hover: #6b7280;
+    --color-white: #ffffff;
+    --color-black: #000000;
+    --border-radius-small: 0.5rem;
+    --border-radius-medium: 0.75rem;
+    --border-radius-large: 1rem;
+    --spacing-small: 0.5rem;
+    --spacing-medium: 0.75rem;
+    --spacing-large: 1rem;
+    --font-weight-bold: 700;
+    --font-size-medium: 1.125rem;
+    --transition-speed: 0.3s;
+}
+
+/* Primary Button */
+.session-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--spacing-small);
+    padding: 8px 12px;
+    border-radius: var(--border-radius-large);
+    color: white;
+    transition:
+        background-color var(--transition-speed),
+        box-shadow var(--transition-speed);
+    :is(label) {
+        font-size: var(--font-size-medium);
+        font-weight: var(--font-weight-bold);
+        color: var(--color-white);
+    }
+}
+.button-primary {
+    background-color: var(--color-primary);
+}
+
+.button-primary:hover {
+    background-color: var(--color-primary-hover);
+}
+
+.button-caution {
+    background-color: var(--color-caution);
+}
+
+.button-caution:hover {
+    background-color: var(--color-caution-hover);
+}
+
+/* Interactive Borders */
+.interactive-border {
+    border: 1px solid var(--color-border);
+    box-shadow: 0 2px 0 var(--color-border);
+}
+
+.interactive-border:hover {
+    box-shadow: 0 1px 0 var(--color-border-hover);
+}
+
+/* Containers */
+.input-container {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-medium);
+    padding: var(--spacing-small) var(--spacing-large);
+    border-radius: var(--border-radius-medium);
+    justify-content: space-between;
+
+    .input-button {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        justify-content: space-between;
+        width: 100%;
+    }
+}
+
+.url-container {
+    width: 8rem;
+    white-space: nowrap;
+    overflow-x: auto;
+}
+
+/* Session Menu Description */
+.sessionMenu-description {
+    font-weight: var(--font-weight-bold);
+    line-height: 1.25;
+    letter-spacing: -0.015em;
+    text-align: center;
+}
+
+/* Session Menu Content */
+.sessionMenuContent-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+    gap: var(--spacing-large);
+    color: var(--color-black);
+}
+
+/* QR Code Container */
+.qrCode-container {
+    padding: 1.25rem;
+    border-radius: var(--border-radius-medium);
+}

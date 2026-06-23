@@ -1,0 +1,104 @@
+{
+  "name": "react-together",
+  "description": "A library to seamlessly add real-time multi-user interaction to your React app!",
+  "version": "0.4.4",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json",
+    "./CHANGELOG.md": "./CHANGELOG.md"
+  },
+  "files": [
+    "README.md",
+    "CHANGELOG.md",
+    "dist"
+  ],
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "scripts": {
+    "start": "npm run watch",
+    "prepublishOnly": "npm run build && cp ../../README.md .",
+    "postpublish": "rm README.md",
+    "prettier": "prettier . --check",
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "build": "tsc && vite build",
+    "watch": "npm run build -- --watch",
+    "clean": "rm -rf node_modules dist",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@multisynq/react": "^1.0.2",
+    "object-hash": "^3.0.0",
+    "primeicons": "^7.0.0",
+    "qrcode.react": "^3.1.0"
+  },
+  "peerDependencies": {
+    "color-hash": "^2.0.2",
+    "primereact": "^10.8.4",
+    "react": "18 - 19",
+    "react-dom": "18 - 19",
+    "unique-names-generator": "^4.7.1"
+  },
+  "devDependencies": {
+    "@jest/globals": "^29.7.0",
+    "@types/color-hash": "^2.0.0",
+    "@types/node": "^20.11.30",
+    "@types/object-hash": "^3.0.6",
+    "@types/react": "^18.2.71",
+    "@types/react-dom": "^18.2.22",
+    "@typescript-eslint/eslint-plugin": "^6.21.0",
+    "@typescript-eslint/parser": "^6.21.0",
+    "@vitejs/plugin-react": "^4.2.1",
+    "@vitejs/plugin-react-swc": "^3.5.0",
+    "eslint": "^8.57.0",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "eslint-plugin-react-refresh": "^0.4.6",
+    "glob": "^10.3.10",
+    "jest": "^29.7.0",
+    "prettier": "^3.3.3",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "ts-jest": "^29.2.5",
+    "typescript": "^5.4.3",
+    "vite": "^4.5.3",
+    "vite-plugin-dts": "^3.7.3",
+    "vite-plugin-lib-inject-css": "^2.0.1"
+  },
+  "bugs": "https://github.com/multisynq/react-together/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/multisynq/react-together.git",
+    "directory": "packages/react-together"
+  },
+  "homepage": "https://reacttogether.dev",
+  "keywords": [
+    "react",
+    "together",
+    "react-together",
+    "real-time",
+    "multi-user",
+    "multiplayer",
+    "websockets",
+    "sockets",
+    "interaction",
+    "interactive",
+    "collaboration",
+    "collaborative",
+    "presence",
+    "synchronize",
+    "synchronized",
+    "rooms",
+    "sessions",
+    "interaction",
+    "shared state",
+    "croquet",
+    "multisynq"
+  ]
+}

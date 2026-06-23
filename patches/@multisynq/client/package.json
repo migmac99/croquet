@@ -1,0 +1,69 @@
+{
+  "name": "@multisynq/client",
+  "version": "1.1.0-ALMA",
+  "description": "Real-time multiplayer framework for web applications",
+  "author": "Croquet Labs",
+  "main": "dist/multisynq-client.cjs.js",
+  "module": "dist/multisynq-client.esm.js",
+  "exports": {
+    ".": {
+      "node": {
+        "types": "./dist/multisynq-client.d.ts",
+        "import": "./dist/multisynq-client-node.mjs",
+        "require": "./dist/multisynq-client-node.cjs"
+      },
+      "default": {
+        "types": "./dist/multisynq-client.d.ts",
+        "import": "./dist/multisynq-client.esm.js",
+        "require": "./dist/multisynq-client.cjs.js"
+      }
+    }
+  },
+  "types": "dist/multisynq-client.d.ts",
+  "files": [
+    "dist",
+    "bundled"
+  ],
+  "jsdelivr": "bundled/multisynq-client.min.js",
+  "unpkg": "bundled/multisynq-client.min.js",
+  "license": "Apache-2.0",
+  "keywords": [
+    "multisynq",
+    "multiplayer",
+    "multiuser",
+    "collaboration",
+    "realtime"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/multisynq/multisynq-client.git"
+  },
+  "bugs": {
+    "url": "https://github.com/multisynq/multisynq-client/issues"
+  },
+  "homepage": "https://github.com/multisynq/multisynq-client#readme",
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node watch.mjs",
+    "prepare": "npm run build"
+  },
+  "dependencies": {
+    "@stdlib/stdlib": "^0.3.2",
+    "crypto-js": "^4.2.0",
+    "fast-json-stable-stringify": "^2.1.0",
+    "fastpriorityqueue": "^0.7.5",
+    "minimist": "^1.2.8",
+    "node-datachannel": "^0.28.0",
+    "pako": "^2.1.0",
+    "toastify-js": "^1.12.0",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "chokidar": "^4.0.3",
+    "esbuild": "^0.25.5",
+    "esbuild-node-externals": "^1.13.0",
+    "esbuild-plugin-replace": "^1.3.0",
+    "find-cache-dir": "^5.0.0",
+    "jsdoc": "^4.0.4"
+  }
+}
