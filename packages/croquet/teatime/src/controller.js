@@ -84,7 +84,7 @@ function initOptions() {
     };
     if (DEBUG.offline) App.showMessage(`${App.libName}: offline mode enabled, no multiuser`, { level: "warning"});
     if (urlOptions.box) {
-        let url = new URL(urlOptions.box, window.location).href;
+        let url = new URL(urlOptions.box, NODE ? undefined : window.location).href;
         if (!url.endsWith("/")) url += "/";
         urlOptions.reflector = url + "reflector";
         urlOptions.files = url + "files";
@@ -892,7 +892,7 @@ export default class Controller {
     uploadServer(apiKeysWithBackend) {
         // allow overrides (should also allow override via backend?)
         if (typeof urlOptions.files === "string") {
-            let url = new URL(urlOptions.files, window.location).href;
+            let url = new URL(urlOptions.files, NODE ? undefined : window.location).href;
             if (url.endsWith('/')) url = url.slice(0, -1);
             return { url, apiKey: null };
         }
@@ -1337,6 +1337,7 @@ export default class Controller {
                 // if we are rejoining, check if we can do that seamlessly without taking down the view
                 // meaning we have all the messages we missed while disconnected
                 let rejoining = !!this.vm;
+                let bufferedSends = null; // will only be used in the case of a seamless rejoin
                 if (rejoining) {
                     // In theory we could try to preserve unsimulated messages but that would complicate the logic
                     // considerably, and only help in the rather unlikely case of a snapshot being taken while simulation
@@ -1383,12 +1384,11 @@ export default class Controller {
                         }
                     }
                     if (seamlessRejoin) {
-                        // send out messages we buffered while disconnected
+                        // capture any messages buffered while disconnected, to be
+                        // flushed after syncCompleted is set to true (see below)
                         if (this.sendBuffer.length > 0) {
-                            const sends = this.sendBuffer;
-                            this.sendBuffer = [];   // if we get disconnected again, sends will be re-buffered
-                            if (DEBUG.session) console.log(this.id, `rejoin: sending ${sends.length} messages buffered while disconnected`);
-                            for (const f of sends) f();
+                            bufferedSends = this.sendBuffer;
+                            this.sendBuffer = [];
                         }
                         // proceed to enqueue the messages we missed while disconnected
                     } else {
@@ -1421,10 +1421,16 @@ export default class Controller {
                 }
                 this.networkQueue.push(...messagesSinceSync);
                 if (time > this.reflectorTime) this.timeFromReflector(time, "reflector");
-                // if we were rejoining, then our work is done here: we got all the missing messages (and no need to report join progress)
+                // if we were rejoining, at this point our work is done.  we have all the missing incoming messages (and no need to report join progress); as a final step we just need to send any outgoing ones that were buffered.
                 if (rejoining) {
                     if (DEBUG.session) console.log(this.id, "seamless rejoin successful");
                     this.syncCompleted = true;
+                    // now flush any messages that were buffered while disconnected.
+                    // socketSendMessage is async, so these will be sent after we return.
+                    if (bufferedSends) {
+                        if (DEBUG.session) console.log(this.id, `rejoin: sending ${bufferedSends.length} messages buffered while disconnected`);
+                        for (const f of bufferedSends) f();
+                    }
                     return;
                 }
                 this.timeline = timeline || ""; // stored only on initial connection
@@ -2819,7 +2825,9 @@ class Connection {
             // the onclose handling directly.
             this.socket.onclose = null;
             try {
-                this.socket.close(code, message); // might work, might not
+                let reason = message;
+                if (reason && reason.length > 123) reason = reason.slice(0, 123);
+                this.socket.close(code, reason); // might work, might not
             } catch (e) { console.error(`Error in socket.close(${code}, ${JSON.stringify(message)}):`, e); }
         }
         // whether there was a socket or not, reset the connection so we can try again
