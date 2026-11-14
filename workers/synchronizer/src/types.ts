@@ -23,6 +23,7 @@ export interface Env {
 
   // Secrets
   JWT_SECRET?: string
+  SYNQ_ADMIN_TOKEN?: string // Bearer token for the admin routes (/session/*, /sessions/r2)
 }
 
 // Client metadata

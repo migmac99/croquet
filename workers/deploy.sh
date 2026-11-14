@@ -321,6 +321,8 @@ deploy_sync() {
         CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID" bunx wrangler deploy
     fi
     success "Synchronizer deployed!"
+    warn "The admin routes (/session/*, /sessions/r2) need SYNQ_ADMIN_TOKEN, the same on the synchronizer and the manager:"
+    echo "  bunx wrangler secret put SYNQ_ADMIN_TOKEN --env $ENV   (in synchronizer/ and manager/; see README \"Admin token\")"
 }
 
 # Generate manager wrangler.toml from config
@@ -495,6 +497,7 @@ deploy_mgr() {
     echo "  4. Add policy: Allow emails from your domain"
     echo "  5. Copy the Application Audience (AUD) tag"
     echo "  6. Set ACCESS_AUD in wrangler.toml or as secret"
+    echo "  7. Set SYNQ_ADMIN_TOKEN (the synchronizer's value) as a secret: bunx wrangler secret put SYNQ_ADMIN_TOKEN --env $ENV"
 }
 
 # Run single worker locally

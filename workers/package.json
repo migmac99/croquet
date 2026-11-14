@@ -14,7 +14,8 @@
     "tail:synq": "./deploy.sh tail:sync",
     "tail:mgr": "./deploy.sh tail:mgr",
     "tail:staging": "./deploy.sh staging:tail",
-    "install": "cd manager && bun i && cd ../synchronizer && bun i"
+    "install": "cd manager && bun i && cd ../synchronizer && bun i",
+    "test": "cd synchronizer && bunx vitest run"
   },
   "devDependencies": {
     "wrangler": "4.51.0"

@@ -141,13 +141,35 @@ workers/
 
 ### Synchronizer (synq.alma.dev)
 
-| Endpoint                          | Protocol  | Description               |
-| --------------------------------- | --------- | ------------------------- |
-| `wss://synq.alma.dev/{sessionId}` | WebSocket | Session connection        |
-| `GET /health`                     | HTTP      | Health check              |
-| `PUT /files/*`                    | HTTP      | Upload snapshot to R2     |
-| `GET /files/*`                    | HTTP      | Download snapshot from R2 |
-| `GET /diag.js`                    | HTTP      | Browser diagnostic script |
+| Endpoint                          | Protocol  | Description                                         |
+| --------------------------------- | --------- | --------------------------------------------------- |
+| `wss://synq.alma.dev/{sessionId}` | WebSocket | Session connection                                  |
+| `GET /health`                     | HTTP      | Health check: `{ "status": "ok" }` and nothing else |
+| `PUT /files/*`                    | HTTP      | Upload snapshot to R2                               |
+| `GET /files/*`                    | HTTP      | Download snapshot from R2                           |
+| `GET /diag.js`                    | HTTP      | Browser diagnostic script                           |
+
+Admin routes (the manager's; refused with `401` without `Authorization: Bearer <SYNQ_ADMIN_TOKEN>`, `503` while the secret is unset):
+
+| Endpoint                      | Description                                          |
+| ----------------------------- | ---------------------------------------------------- |
+| `GET /session/{id}`           | The session DO's state                               |
+| `GET /session/{id}/info`      | Session details (clients, timing, snapshot, metrics) |
+| `GET /session/{id}/snapshots` | The session's stored snapshots                       |
+| `POST /session/{id}/requ`     | Ask the session's clients for a snapshot now         |
+| `GET /sessions/r2`            | Every session with snapshots in R2                   |
+
+### Admin token
+
+`SYNQ_ADMIN_TOKEN` is a Worker secret set to the same value on the synchronizer and the manager; the manager sends it only to its own `SYNCHRONIZER_URL`, and the inspector's browser-side refresh goes through the manager (`GET /api/sessions/{id}/snapshots`, behind Cloudflare Access). Clients never need it: they join over the WebSocket and use `/join` and `/files/*` as before.
+
+```bash
+TOKEN=$(openssl rand -hex 32)
+(cd synchronizer && echo "$TOKEN" | bunx wrangler secret put SYNQ_ADMIN_TOKEN --env production)
+(cd manager && echo "$TOKEN" | bunx wrangler secret put SYNQ_ADMIN_TOKEN --env production)
+```
+
+Locally, put `SYNQ_ADMIN_TOKEN=<any value>` in both `synchronizer/.dev.vars` and `manager/.dev.vars` (gitignored). Tests: `bun run test` here (the synchronizer's, the manager's and the shared package's).
 
 ### Registry (synqreg.alma.dev)
 

@@ -257,7 +257,7 @@
 
   async function refreshSnapshots() {
     try {
-      const res = await fetch('{{sync_url}}/session/{{session_id_encoded}}/snapshots')
+      const res = await fetch('/api/sessions/{{session_id_encoded}}/snapshots')
       if (!res.ok) throw new Error('Failed to fetch snapshots')
       const data = await res.json()
 

@@ -150,8 +150,13 @@ export class Synchronizer extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url)
 
+    // The inspection routes below are reached only through the worker's admin-guarded
+    // /session/{id}/... routes, which forward a plain request to exactly these paths. A WebSocket
+    // upgrade (whatever its path, e.g. /v1/{session}/info) never reaches them.
+    const internal = request.headers.get('Upgrade') === null ? url.pathname : null
+
     // Health check (basic)
-    if (url.pathname.endsWith('/health')) {
+    if (internal === '/health') {
       const sockets = this.ctx.getWebSockets()
       return Response.json({
         status: 'ok',
@@ -164,7 +169,7 @@ export class Synchronizer extends DurableObject<Env> {
     }
 
     // Detailed session info (for inspector/debugging)
-    if (url.pathname.endsWith('/info')) {
+    if (internal === '/info') {
       try {
         // Ensure storage is available for inactive session queries
         if (!this.storage && this.env.SNAPSHOTS) {
@@ -178,7 +183,7 @@ export class Synchronizer extends DurableObject<Env> {
     }
 
     // List snapshots for this session
-    if (url.pathname.endsWith('/snapshots')) {
+    if (internal === '/snapshots') {
       try {
         // Ensure storage is available for inactive session queries
         if (!this.storage && this.env.SNAPSHOTS) {
@@ -192,7 +197,7 @@ export class Synchronizer extends DurableObject<Env> {
     }
 
     // Manual snapshot request (POST /requ) - sends REQU to all connected clients
-    if (url.pathname.endsWith('/requ') && request.method === 'POST') {
+    if (internal === '/requ' && request.method === 'POST') {
       const sockets = this.ctx.getWebSockets()
       if (sockets.length === 0) {
         return Response.json({ error: 'No clients connected' }, { status: 404 })

@@ -15,6 +15,9 @@ export interface Env {
   // Config
   SYNCHRONIZER_URL: string
   CLUSTER_LABEL: string
+
+  // Secrets
+  SYNQ_ADMIN_TOKEN?: string // Sent to the synchronizer's admin routes (/session/*, /sessions/r2); same value on both workers
 }
 
 /**

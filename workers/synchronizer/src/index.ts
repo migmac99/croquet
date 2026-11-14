@@ -7,7 +7,8 @@
 
 import type { Env } from './types'
 import { Synchronizer } from './synchronizer'
-import { corsHeaders, handleCors, jsonResponse, errorResponse, isOriginAllowed, getOrigin } from '@croquet/worker-shared'
+import { sessionRoute } from './admin-routes'
+import { corsHeaders, handleCors, jsonResponse, errorResponse, isOriginAllowed, getOrigin, checkAdmin } from '@croquet/worker-shared'
 
 // Re-export DO class for wrangler
 export { Synchronizer }
@@ -22,17 +23,9 @@ export default {
     // CORS preflight
     if (request.method === 'OPTIONS') return handleCors()
 
-    // Health check endpoint
+    // Health check endpoint: says only that the worker answers, nothing about sessions or the deployment
     if (url.pathname === '/healthz' || url.pathname === '/health') {
-      return Response.json(
-        {
-          status: 'ok',
-          cluster: env.CLUSTER_LABEL,
-          version: env.PROTOCOL_VERSION,
-          timestamp: Date.now(),
-        },
-        { headers: corsHeaders() }
-      )
+      return Response.json({ status: 'ok' }, { headers: corsHeaders() })
     }
 
     // Metrics endpoint (basic)
@@ -48,24 +41,26 @@ export default {
     // SDK calls /sign/join?meta=login or /join?meta=login for key validation
     if (['/sign/join', '/clients/join', '/join'].includes(url.pathname)) return handleApiKeyValidation(request, env)
 
-    // List all sessions with snapshots in R2 (for manager discovery)
+    // List all sessions with snapshots in R2 (for manager discovery): admin only
     // This finds sessions that have snapshot data even if they're not tracked in KV
-    if (url.pathname === '/sessions/r2' && request.method === 'GET') {
+    if (url.pathname === '/sessions/r2') {
+      const refused = await refuseUnlessAdmin(request, env)
+      if (refused) return refused
+      if (request.method !== 'GET') return errorResponse('Method not allowed', 405)
       return listR2Sessions(env, url)
     }
 
-    // Session info endpoints: /session/{id}, /session/{id}/info, /session/{id}/snapshots, /session/{id}/requ
-    if (url.pathname.startsWith('/session/') && (request.method === 'GET' || request.method === 'POST')) {
-      const parts = url.pathname.split('/').filter(Boolean) // ['session', '{id}', 'info'?]
-      const sessionId = parts[1]
-      const subpath = parts[2] // 'info', 'snapshots', 'requ', or undefined
-      if (sessionId) {
-        const id = env.SYNCHRONIZER.idFromName(sessionId)
-        const stub = env.SYNCHRONIZER.get(id)
-        // Forward to appropriate DO endpoint
-        const doPath = subpath === 'info' ? '/info' : subpath === 'snapshots' ? '/snapshots' : subpath === 'requ' ? '/requ' : '/health'
-        return stub.fetch(new Request(`${url.origin}${doPath}`, { method: request.method }))
-      }
+    // Session inspection and control: /session/{id}, /session/{id}/info, /session/{id}/snapshots,
+    // /session/{id}/requ. Admin only (the synq manager sends SYNQ_ADMIN_TOKEN); a client never calls
+    // these: it joins and plays over the WebSocket, and receives REQU there.
+    if (url.pathname.startsWith('/session/') && request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
+      const refused = await refuseUnlessAdmin(request, env)
+      if (refused) return refused
+      const route = sessionRoute(url, request.method)
+      if (!route) return errorResponse('Not found', 404)
+      if ('error' in route) return errorResponse(route.error, route.status)
+      const stub = env.SYNCHRONIZER.get(env.SYNCHRONIZER.idFromName(route.sessionId))
+      return stub.fetch(new Request(`${url.origin}${route.doPath}`, { method: request.method }))
     }
 
     // Diagnostic script endpoint - load via: fetch('https://synq.alma.dev/diag.js').then(r=>r.text()).then(eval)
@@ -143,6 +138,19 @@ function extractSessionId(url: URL): string | null {
   if (parts.length > 0) return parts[parts.length - 1]
 
   return null
+}
+
+/**
+ * Refuse a request that doesn't carry the admin token (`Authorization: Bearer <SYNQ_ADMIN_TOKEN>`).
+ * Returns null when it does. With no token configured the admin routes are closed to everyone.
+ */
+async function refuseUnlessAdmin(request: Request, env: Env): Promise<Response | null> {
+  const check = await checkAdmin(request, env.SYNQ_ADMIN_TOKEN)
+  if (check === 'ok') return null
+  if (check === 'unconfigured') return errorResponse('Admin routes are not configured', 503)
+  const res = errorResponse(check === 'missing' ? 'Missing admin token' : 'Invalid admin token', 401)
+  res.headers.set('WWW-Authenticate', 'Bearer')
+  return res
 }
 
 /**

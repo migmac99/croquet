@@ -36,6 +36,7 @@ import {
   renderSessionInspectorPage,
   type SessionInspectorData,
 } from './ui'
+import { syncAdminFetch } from './sync-admin'
 
 /**
  * Check if a string looks like a valid URL (has protocol)
@@ -325,6 +326,12 @@ export default {
       // Storage data endpoint (JSON for UI refresh without page reload)
       if (path === '/api/storage-data') {
         return await getStorageData(env)
+      }
+
+      // A session's snapshots, for the inspector's Refresh (the browser can't send the admin token)
+      const sessionSnapshotsMatch = path.match(/^\/api\/sessions\/(.+)\/snapshots$/)
+      if (sessionSnapshotsMatch && request.method === 'GET') {
+        return await getSessionSnapshots(decodeURIComponent(sessionSnapshotsMatch[1]), env)
       }
 
       // Sessions management
@@ -1025,7 +1032,7 @@ async function listSessions(env: Env, includeR2 = false): Promise<Response> {
   if (includeR2 && env.SYNCHRONIZER_URL) {
     try {
       const syncUrl = env.SYNCHRONIZER_URL.replace(/^ws/, 'http')
-      const r2Response = await fetch(`${syncUrl}/sessions/r2?limit=500`)
+      const r2Response = await syncAdminFetch(env, `${syncUrl}/sessions/r2?limit=500`)
       if (r2Response.ok) {
         const r2Data = (await r2Response.json()) as { sessions: Array<{ sessionId: string; lastActivity?: number | null }> }
         r2Sessions = r2Data.sessions || []
@@ -1528,7 +1535,7 @@ async function getSessionsUI(env: Env, user: AuthenticatedUser, includeR2 = fals
   if (includeR2 && env.SYNCHRONIZER_URL) {
     try {
       const syncUrl = env.SYNCHRONIZER_URL.replace(/^ws/, 'http')
-      const r2Response = await fetch(`${syncUrl}/sessions/r2?limit=500`)
+      const r2Response = await syncAdminFetch(env, `${syncUrl}/sessions/r2?limit=500`)
       if (r2Response.ok) {
         const r2Data = (await r2Response.json()) as { sessions: Array<{ sessionId: string; lastActivity?: number | null }> }
         const r2Sessions = r2Data.sessions || []
@@ -1630,7 +1637,7 @@ async function getSessionsData(env: Env, includeR2 = false): Promise<Response> {
   if (includeR2 && env.SYNCHRONIZER_URL) {
     try {
       const syncUrl = env.SYNCHRONIZER_URL.replace(/^ws/, 'http')
-      const r2Response = await fetch(`${syncUrl}/sessions/r2?limit=500`)
+      const r2Response = await syncAdminFetch(env, `${syncUrl}/sessions/r2?limit=500`)
       if (r2Response.ok) {
         const r2Data = (await r2Response.json()) as { sessions: Array<{ sessionId: string; lastActivity?: number | null }> }
         const r2Sessions = r2Data.sessions || []
@@ -2457,6 +2464,16 @@ async function getSettingsUI(env: Env, user: AuthenticatedUser): Promise<Respons
 }
 
 /**
+ * A session's snapshot list from its synchronizer (the inspector's Refresh)
+ */
+async function getSessionSnapshots(sessionId: string, env: Env): Promise<Response> {
+  const sessionRecord = await env.SESSIONS.get<SessionRecord>(`session:${sessionId}`, 'json')
+  const syncUrl = isValidUrl(sessionRecord?.synchronizerUrl) ? sessionRecord!.synchronizerUrl : env.SYNCHRONIZER_URL
+  const res = await syncAdminFetch(env, `${syncUrl.replace(/^ws/, 'http')}/session/${encodeURIComponent(sessionId)}/snapshots`)
+  return new Response(res.body, { status: res.status, headers: { 'Content-Type': 'application/json' } })
+}
+
+/**
  * Session Inspector UI - detailed view of a single session
  */
 async function getSessionInspectorUI(sessionId: string, env: Env, user: AuthenticatedUser): Promise<Response> {
@@ -2477,8 +2494,8 @@ async function getSessionInspectorUI(sessionId: string, env: Env, user: Authenti
 
     // Fetch session info and snapshots in parallel
     const [infoRes, snapshotsRes] = await Promise.all([
-      fetch(`${httpUrl}/session/${encodeURIComponent(sessionId)}/info`),
-      fetch(`${httpUrl}/session/${encodeURIComponent(sessionId)}/snapshots`),
+      syncAdminFetch(env, `${httpUrl}/session/${encodeURIComponent(sessionId)}/info`),
+      syncAdminFetch(env, `${httpUrl}/session/${encodeURIComponent(sessionId)}/snapshots`),
     ])
 
     if (infoRes.ok) {
