@@ -421,6 +421,14 @@ export class Synchronizer extends DurableObject<Env> {
     })
     const isEffectivelyFirstClient = !this.state || otherJoinedClients.length === 0
 
+    // Nobody else is in: joins and leaves still queued from before (the object was made again between a join and its
+    // who-is-here message, and the queue was stored with the state) are about people who are gone. Announced with
+    // this joiner, they would stand in everyone's model as someone who never leaves.
+    if (isEffectivelyFirstClient && this.state) {
+      this.state.usersJoined = []
+      this.state.usersLeft = []
+    }
+
     // Initialize session state if first client
     if (!this.state) {
       const startTime = now()
@@ -560,40 +568,6 @@ export class Synchronizer extends DurableObject<Env> {
     // This catches corruption from hibernation/wake, stale state, or pre-fix send errors
     let stateWasCorrected = false
 
-    // Detect internal seq gaps in the message buffer (runs on ALL non-empty buffers)
-    // A gap means a message was lost (e.g. from a send error before the buffer-before-send fix).
-    // Corrupted buffers cause "Expected message #X got #Y" errors on every reconnection.
-    if (this.state.messages.length > 1) {
-      for (let i = 1; i < this.state.messages.length; i++) {
-        const prevSeq = (this.state.messages[i - 1] as number[])?.[1]
-        const currSeq = (this.state.messages[i] as number[])?.[1]
-        if (prevSeq !== undefined && currSeq !== undefined) {
-          const expectedSeq = (prevSeq + 1) >>> 0
-          if (currSeq !== expectedSeq) {
-            console.error(
-              `[${this.sessionId}] BUFFER GAP DETECTED at index ${i}: expected seq=${expectedSeq} got seq=${currSeq}. ` +
-                `Clearing corrupted buffer (${this.state.messages.length} messages). ` +
-                `hasSnapshot=${!!snapshotUrl}, snapshotSeq=${snapshotSeq}`
-            )
-            this.state.messages = []
-            // Reset seq so new messages sequence correctly
-            if (snapshotSeq) {
-              this.state.seq = snapshotSeq
-            } else {
-              this.state.seq = INITIAL_SEQ
-            }
-            // The numbers after the snapshot are given out again from here, to other messages: this is a new
-            // incarnation of the session, so it gets a new timeline. A client reconnecting with a model from the
-            // old history must load the snapshot, never go on "seamlessly" (it compares timelines) with messages
-            // the others never had.
-            this.state.timeline = generateTimeline()
-            stateWasCorrected = true
-            break
-          }
-        }
-      }
-    }
-
     if (!clientMustInitFresh && this.state.messages.length > 0) {
       const firstMsgSeq = (this.state.messages[0] as number[])?.[1]
       const lastMsgSeq = (this.state.messages[this.state.messages.length - 1] as number[])?.[1]
@@ -609,6 +583,47 @@ export class Synchronizer extends DurableObject<Env> {
         console.warn(`[${this.sessionId}] Seq inconsistent: state.seq=${this.state.seq} is before last msg seq=${lastMsgSeq}. Correcting to ${lastMsgSeq}.`)
         this.state.seq = lastMsgSeq
         stateWasCorrected = true
+      }
+    }
+
+    // What a joiner replays must start right after what it loads and end at the session's number (`bufferFault`).
+    // A buffer that doesn't can't be joined by anyone: every joiner fails with "Expected message #X got #Y", for
+    // ever. It happened when a send threw before the message was buffered (before the buffer-before-send fix): the
+    // number was given out and the message lost, in the middle of the buffer, at its end, or right after a snapshot.
+    {
+      const base = snapshotUrl ? snapshotSeq : INITIAL_SEQ
+      const fault = bufferFault(this.state.messages, base, this.state.seq)
+      if (fault) {
+        // Clients that are in and answering: they hold the session's state as it really is. (A connection the
+        // runtime still lists after we closed it for saying nothing is nobody.)
+        const lively = this.ctx.getWebSockets().filter((s) => {
+          if (s === ws) return false
+          const att = s.deserializeAttachment() as WSAttachment | null
+          return att?.active === true && Date.now() - att.lastSeen < DISCONNECT_THRESHOLD_MS
+        }).length
+        if (lively === 0) {
+          // Nobody holds anything newer than the snapshot plus this buffer, and the buffer can't be replayed: go on
+          // from the snapshot (or afresh), so the room can be joined again.
+          console.error(
+            `[${this.sessionId}] BUFFER FAULT: ${fault}. Nobody is in: clearing the buffer (${this.state.messages.length} messages) ` +
+              `and going on from ${snapshotUrl ? `the snapshot (seq ${snapshotSeq})` : 'a fresh start'}.`
+          )
+          this.state.messages = []
+          this.state.seq = base
+          // The numbers after the snapshot are given out again from here, to other messages: this is a new
+          // incarnation of the session, so it gets a new timeline. A client reconnecting with a model from the old
+          // history must load the snapshot, never go on "seamlessly" (it compares timelines) with messages the
+          // others never had.
+          this.state.timeline = generateTimeline()
+          stateWasCorrected = true
+        } else {
+          // People are playing: what they hold is never thrown away for a joiner. They are asked for a snapshot,
+          // which purges the buffer up to where they are; until it comes this joiner fails as it did before, and
+          // joins again. (A join that raced a snapshot being saved reads as a fault for a moment too, and must
+          // not cost the room anything.)
+          console.error(`[${this.sessionId}] BUFFER FAULT: ${fault}. ${lively} client(s) are in: left as it is, snapshot requested.`)
+          this.sendREQU()
+        }
       }
     }
 
@@ -2000,6 +2015,30 @@ export class Synchronizer extends DurableObject<Env> {
       return null
     }
   }
+}
+
+/**
+ * Why a joiner couldn't replay this buffer, or null when it can. `base` is the number of the last message in what the
+ * joiner loads (the snapshot's, or INITIAL_SEQ for a fresh model); `seq` is the session's current number. The client
+ * takes a message only when its number is exactly one more than the last it ran, so the buffer must start at base + 1,
+ * go up one at a time, and end at `seq`; an empty buffer means nothing happened since `base`.
+ */
+export function bufferFault(messages: unknown[][], base: number, seq: number): string | null {
+  const next = (n: number): number => (n + 1) >>> 0
+  // (messages at or before `base` are a head a snapshot hasn't purged yet: not a fault of the buffer's)
+  let from = 0
+  while (from < messages.length && !after(base, messages[from]?.[1] as number)) from++
+  if (from === messages.length) return seq === base ? null : `nothing buffered after seq ${base}, yet the session is at seq ${seq}`
+  const first = messages[from]?.[1] as number
+  if (first !== next(base)) return `the first buffered message is seq ${first}, not ${next(base)}`
+  for (let i = from + 1; i < messages.length; i++) {
+    const prev = messages[i - 1]?.[1] as number
+    const curr = messages[i]?.[1] as number
+    if (curr !== next(prev)) return `a gap at index ${i}: seq ${curr} follows seq ${prev}`
+  }
+  const last = messages[messages.length - 1]?.[1] as number
+  if (last !== seq) return `the last buffered message is seq ${last}, yet the session is at seq ${seq}`
+  return null
 }
 
 /** Format bytes to human-readable string */
