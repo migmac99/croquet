@@ -582,6 +582,11 @@ export class Synchronizer extends DurableObject<Env> {
             } else {
               this.state.seq = INITIAL_SEQ
             }
+            // The numbers after the snapshot are given out again from here, to other messages: this is a new
+            // incarnation of the session, so it gets a new timeline. A client reconnecting with a model from the
+            // old history must load the snapshot, never go on "seamlessly" (it compares timelines) with messages
+            // the others never had.
+            this.state.timeline = generateTimeline()
             stateWasCorrected = true
             break
           }
